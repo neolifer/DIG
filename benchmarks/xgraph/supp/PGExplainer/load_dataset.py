@@ -5,7 +5,7 @@ import torch
 import pickle
 import numpy as np
 import os.path as osp
-from PGExplainer.Configures import data_args
+
 from torch_geometric.datasets import MoleculeNet
 from torch_geometric.data import Data, InMemoryDataset, DataLoader
 from torch_geometric.utils import dense_to_sparse
@@ -75,7 +75,8 @@ def read_sentigraph_data(folder: str, prefix: str):
 
 
 def read_syn_data(folder: str, prefix):
-    with open(os.path.join(folder, f"{prefix}.pkl"), 'rb') as f:
+
+    with open(os.path.join(folder+f"{prefix}.pkl"), 'rb') as f:
         adj, features, y_train, y_val, y_test, train_mask, val_mask, test_mask, edge_label_matrix = pickle.load(f)
 
     x = torch.from_numpy(features).float()
@@ -234,15 +235,17 @@ class SynGraphDataset(InMemoryDataset):
     def __init__(self, root, name, transform=None, pre_transform=None):
         self.name = name
         super(SynGraphDataset, self).__init__(root, transform, pre_transform)
+
         self.data, self.slices = torch.load(self.processed_paths[0])
 
     @property
     def raw_dir(self):
-        return osp.join(self.root, self.name, '/raw/')
+
+        return self.root +'/'+ self.name+ '/raw/'
 
     @property
     def processed_dir(self):
-        return osp.join(self.root, self.name, '/processed/')
+        return self.root+self.name+'/processed/'
 
     @property
     def raw_file_names(self):

@@ -497,25 +497,25 @@ class GCN_2l_mask(GNNBasic):
 
         self.dropout = nn.Dropout()
 
-    def forward(self, *args, **kwargs) -> torch.Tensor:
+    def forward(self, data) -> torch.Tensor:
         """
         :param Required[data]: Batch - input data
         :return:
         """
-        x, edge_index, batch = self.arguments_read(*args, **kwargs)
+        x, edge_index= data.x, data.edge_index
 
         post_conv = self.relu1(self.conv1(x, edge_index))
         for conv, relu in zip(self.convs, self.relus):
             post_conv = relu(conv(post_conv, edge_index))
 
-        out_readout = self.readout(post_conv, batch)
+        out_readout = self.readout(post_conv, 0)
 
         out = self.ffn(out_readout)
 
         return out
 
-    def get_emb(self, *args, **kwargs) -> torch.Tensor:
-        x, edge_index, batch = self.arguments_read(*args, **kwargs)
+    def get_emb(self, data) -> torch.Tensor:
+        x, edge_index= data.x, data.edge_index
         post_conv = self.conv1(x, edge_index)
         for conv in self.convs:
             post_conv = conv(post_conv, edge_index)
@@ -815,7 +815,7 @@ class GCN2Conv(gnn.GCN2Conv):
             if isinstance(edge_index, Tensor):
                 cache = self._cached_edge_index
                 if cache is None:
-                    edge_index, edge_weight = gcn_norm(  # yapf: disable
+                    edge_index, edge_weight = gnn.conv.gcn_conv.gcn_norm(  # yapf: disable
                         edge_index, edge_weight, x.size(self.node_dim), False,
                         self.add_self_loops, dtype=x.dtype)
                     if self.cached:
@@ -826,7 +826,7 @@ class GCN2Conv(gnn.GCN2Conv):
             elif isinstance(edge_index, SparseTensor):
                 cache = self._cached_adj_t
                 if cache is None:
-                    edge_index = gcn_norm(  # yapf: disable
+                    edge_index = gnn.conv.gcn_conv.gcn_norm(  # yapf: disable
                         edge_index, edge_weight, x.size(self.node_dim), False,
                         self.add_self_loops, dtype=x.dtype)
                     if self.cached:
@@ -867,7 +867,7 @@ class GCN2Conv_mask(gnn.GCN2Conv):
             if isinstance(edge_index, Tensor):
                 cache = self._cached_edge_index
                 if cache is None:
-                    edge_index, edge_weight = gcn_norm(  # yapf: disable
+                    edge_index, edge_weight = gnn.conv.gcn_conv.gcn_norm(  # yapf: disable
                         edge_index, edge_weight, x.size(self.node_dim), False,
                         self.add_self_loops, dtype=x.dtype)
                     if self.cached:
@@ -878,7 +878,7 @@ class GCN2Conv_mask(gnn.GCN2Conv):
             elif isinstance(edge_index, SparseTensor):
                 cache = self._cached_adj_t
                 if cache is None:
-                    edge_index = gcn_norm(  # yapf: disable
+                    edge_index = gnn.conv.gcn_conv.gcn_norm(  # yapf: disable
                         edge_index, edge_weight, x.size(self.node_dim), False,
                         self.add_self_loops, dtype=x.dtype)
                     if self.cached:
@@ -969,12 +969,12 @@ class GCN2(GNNBasic):
 
 
 
-    def forward(self, *args, **kwargs) -> torch.Tensor:
+    def forward(self, data) -> torch.Tensor:
         """
         :param Required[data]: Batch - input data
         :return:
         """
-        x, edge_index, batch = self.arguments_read(*args, **kwargs)
+        x, edge_index = data.x, data.edge_index
         x = F.dropout(x, self.dropout, training=self.training)
         post_conv = self.relu(self.fcs[0](x))
         x_0 = post_conv
@@ -982,19 +982,19 @@ class GCN2(GNNBasic):
             x = F.dropout(x, self.dropout, training=self.training)
             post_conv = self.relu(conv(post_conv, x_0, edge_index))
 
-        out_readout = self.readout(post_conv, batch)
+        out_readout = self.readout(post_conv,0)
 
         out = self.fcs[-1](out_readout)
 
         return out
 
-    def get_emb(self, *args, **kwargs) -> torch.Tensor:
-        x, edge_index, batch = self.arguments_read(*args, **kwargs)
+    def get_emb(self, data) -> torch.Tensor:
+        x, edge_index = data.x, data.edge_index
         post_conv = self.relu(self.fcs[0](x))
         x_0 = post_conv
         for conv in self.convs:
             post_conv = self.relu(conv(post_conv, x_0, edge_index))
-
+        return post_conv
 class GCN2_mask(GNNBasic):
     def __init__(self, model_level, dim_node, dim_hidden, num_classes, alpha, theta, num_layers, shared_weights,dropout):
         super().__init__()
@@ -1016,12 +1016,12 @@ class GCN2_mask(GNNBasic):
 
 
 
-    def forward(self, *args, **kwargs) -> torch.Tensor:
+    def forward(self, data) -> torch.Tensor:
         """
         :param Required[data]: Batch - input data
         :return:
         """
-        x, edge_index, batch = self.arguments_read(*args, **kwargs)
+        x, edge_index = data.x, data.edge_index
         x = F.dropout(x, self.dropout, training=self.training)
         post_conv = self.relu(self.fcs[0](x))
         x_0 = post_conv
@@ -1029,15 +1029,16 @@ class GCN2_mask(GNNBasic):
             x = F.dropout(x, self.dropout, training=self.training)
             post_conv = self.relu(conv(post_conv, x_0, edge_index))
 
-        out_readout = self.readout(post_conv, batch)
+        out_readout = self.readout(post_conv, 0)
 
         out = self.fcs[-1](out_readout)
 
         return out
 
-    def get_emb(self, *args, **kwargs) -> torch.Tensor:
-        x, edge_index, batch = self.arguments_read(*args, **kwargs)
+    def get_emb(self, data) -> torch.Tensor:
+        x, edge_index = data.x, data.edge_index
         post_conv = self.relu(self.fcs[0](x))
         x_0 = post_conv
         for conv in self.convs:
             post_conv = self.relu(conv(post_conv, x_0, edge_index))
+        return post_conv

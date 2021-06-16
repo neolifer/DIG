@@ -28,7 +28,10 @@ from rdkit import Chem
 
 EPS = 1e-6
 
-
+class temp_data():
+    def __init__(self, x, edge_index):
+        self.x = x
+        self.edge_index = edge_index
 def k_hop_subgraph_with_default_whole_graph(
         edge_index, node_idx=None, num_hops=3, relabel_nodes=False,
         num_nodes=None, flow='source_to_target'):
@@ -334,7 +337,7 @@ class PGExplainer(nn.Module):
                  t0: float = 5.0, t1: float = 1.0, num_hops: Optional[int] = None):
         super(PGExplainer, self).__init__()
         self.model = model
-        self.device = device
+        self.device = 'cuda:0'
         self.model.to(self.device)
         self.in_channels = in_channels
         self.explain_graph = explain_graph
@@ -491,8 +494,7 @@ class PGExplainer(nn.Module):
         return gate_inputs
 
     def explain(self,
-                x: Tensor,
-                edge_index: Tensor,
+                data,
                 embed: Tensor,
                 tmp: float = 1.0,
                 training: bool = False)\
@@ -528,15 +530,15 @@ class PGExplainer(nn.Module):
 
         # set the symmetric edge weights
         sym_mask = (self.mask_sigmoid + self.mask_sigmoid.transpose(0, 1)) / 2
-        edge_mask = sym_mask[edge_index[0], edge_index[1]]
+        edge_mask = sym_mask[data.edge_index[0], data.edge_index[1]]
 
         # inverse the weights before sigmoid in MessagePassing Module
         # edge_mask = inv_sigmoid(edge_mask)
         self.__clear_masks__()
-        self.__set_masks__(x, edge_index, edge_mask)
+        self.__set_masks__(data.x, data.edge_index, edge_mask)
 
         # the model prediction with edge mask
-        logits = self.model(x, edge_index)
+        logits = self.model(data)
         probs = F.softmax(logits, dim=-1)
 
         self.__clear_masks__()
@@ -553,8 +555,8 @@ class PGExplainer(nn.Module):
                 ori_pred_dict = {}
                 for gid in tqdm.tqdm(dataset_indices):
                     data = dataset[gid].to(self.device)
-                    logits = self.model(data.x, data.edge_index)
-                    emb = self.model.get_emb(data.x, data.edge_index)
+                    logits = self.model(data)
+                    emb = self.model.get_emb(data)
                     emb_dict[gid] = emb.data.cpu()
                     ori_pred_dict[gid] = logits.argmax(-1).data.cpu()
 
@@ -570,7 +572,7 @@ class PGExplainer(nn.Module):
                 for gid in tqdm.tqdm(dataset_indices):
                     data = dataset[gid]
                     data.to(self.device)
-                    prob, _ = self.explain(data.x, data.edge_index, embed=emb_dict[gid], tmp=tmp, training=True)
+                    prob, _ = self.explain(data, embed=emb_dict[gid], tmp=tmp, training=True)
                     loss_tmp = self.__loss__(prob.squeeze(), ori_pred_dict[gid])
                     loss_tmp.backward()
                     loss += loss_tmp.item()
@@ -593,8 +595,8 @@ class PGExplainer(nn.Module):
                 for node_idx in tqdm.tqdm(torch.where(data.train_mask)[0].tolist()):
                     x, edge_index, y, subset, _ = \
                         self.get_subgraph(node_idx=node_idx, x=data.x, edge_index=data.edge_index, y=data.y)
-                    logits = self.model(data.x, data.edge_index)
-                    emb = self.model.get_emb(data.x, data.edge_index)
+                    logits = self.model(data)
+                    emb = self.model.get_emb(data)
 
                     x_dict[node_idx] = x.to(self.device)
                     edge_index_dict[node_idx] = edge_index.to(self.device)
@@ -612,7 +614,8 @@ class PGExplainer(nn.Module):
                 self.elayers.train()
                 tic = time.perf_counter()
                 for iter_idx, node_idx in tqdm.tqdm(enumerate(x_dict.keys())):
-                    pred, edge_mask = self.explain(x_dict[node_idx], edge_index_dict[node_idx],
+                    data = temp_data(x_dict[node_idx], edge_index_dict[node_idx])
+                    pred, edge_mask = self.explain(data,
                                                    emb_dict[node_idx], tmp, training=True)
                     loss_tmp = self.__loss__(pred[node_idx_dict[node_idx]], pred_dict[node_idx])
                     loss_tmp.backward()
@@ -624,8 +627,7 @@ class PGExplainer(nn.Module):
             print(f"training time is {duration:.5}s")
 
     def forward(self,
-                x: Tensor,
-                edge_index: Tensor,
+                data,
                 **kwargs)\
             -> Tuple[None, List, List[Dict]]:
         r""" explain the GNN behavior for graph and calculate the metric values.
@@ -646,21 +648,21 @@ class PGExplainer(nn.Module):
         # set default subgraph with 10 edges
         top_k = kwargs.get('top_k') if kwargs.get('top_k') is not None else 10
         y = kwargs.get('y')
-        x = x.to(self.device)
-        edge_index = edge_index.to(self.device)
+        x = data.x.to(self.device)
+        edge_index = data.edge_index.to(self.device)
         y = y.to(self.device)
 
         self.__clear_masks__()
-        logits = self.model(x, edge_index)
+        logits = self.model(data)
         probs = F.softmax(logits, dim=-1)
-        embed = self.model.get_emb(x, edge_index)
+        embed = self.model.get_emb(data)
 
         if self.explain_graph:
             # original value
             probs = probs.squeeze()
             label = y
             # masked value
-            _, edge_mask = self.explain(x, edge_index, embed=embed, tmp=1.0, training=False)
+            _, edge_mask = self.explain(data, embed=embed, tmp=1.0, training=False)
             data = Data(x=x, edge_index=edge_index)
             selected_nodes = calculate_selected_nodes(data, edge_mask, top_k)
             maskout_nodes_list = [node for node in range(data.x.shape[0]) if node not in selected_nodes]
@@ -677,8 +679,9 @@ class PGExplainer(nn.Module):
             # masked value
             x, edge_index, _, subset, _ = self.get_subgraph(node_idx, x, edge_index)
             new_node_idx = torch.where(subset == node_idx)[0]
-            embed = self.model.get_emb(x, edge_index)
-            _, edge_mask = self.explain(x, edge_index, embed, tmp=1.0, training=False)
+            data = temp_data(x, edge_index)
+            embed = self.model.get_emb(data)
+            _, edge_mask = self.explain(data, embed, tmp=1.0, training=False)
 
             data = Data(x=x, edge_index=edge_index)
             selected_nodes = calculate_selected_nodes(data, edge_mask, top_k)
