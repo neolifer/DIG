@@ -1,3 +1,5 @@
+import sys
+sys.path.append('../../..')
 from dig.xgraph.dataset import SynGraphDataset
 from dig.xgraph.models import *
 import torch

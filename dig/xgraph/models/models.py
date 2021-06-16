@@ -801,3 +801,243 @@ class GINConv_mask(gnn.GINConv):
 
             update_kwargs = self.inspector.distribute('update', coll_dict)
             return self.update(out, **update_kwargs)
+
+class GCN2Conv(gnn.GCN2Conv):
+    def __innit__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.edge_weights = None
+
+    def forward(self, x: Tensor, x_0: Tensor, edge_index: Adj,
+                edge_weight: OptTensor = None) -> Tensor:
+        """"""
+
+        if self.normalize:
+            if isinstance(edge_index, Tensor):
+                cache = self._cached_edge_index
+                if cache is None:
+                    edge_index, edge_weight = gcn_norm(  # yapf: disable
+                        edge_index, edge_weight, x.size(self.node_dim), False,
+                        self.add_self_loops, dtype=x.dtype)
+                    if self.cached:
+                        self._cached_edge_index = (edge_index, edge_weight)
+                else:
+                    edge_index, edge_weight = cache[0], cache[1]
+
+            elif isinstance(edge_index, SparseTensor):
+                cache = self._cached_adj_t
+                if cache is None:
+                    edge_index = gcn_norm(  # yapf: disable
+                        edge_index, edge_weight, x.size(self.node_dim), False,
+                        self.add_self_loops, dtype=x.dtype)
+                    if self.cached:
+                        self._cached_adj_t = edge_index
+                else:
+                    edge_index = cache
+
+        # propagate_type: (x: Tensor, edge_weight: OptTensor)
+        x = self.propagate(edge_index, x=x, edge_weight=edge_weight, size=None)
+
+        x.mul_(1 - self.alpha)
+        x_0 = self.alpha * x_0[:x.size(0)]
+
+        if self.weight2 is None:
+            out = x.add_(x_0)
+            out = torch.addmm(out, out, self.weight1, beta=1. - self.beta,
+                              alpha=self.beta)
+        else:
+            out = torch.addmm(x, x, self.weight1, beta=1. - self.beta,
+                              alpha=self.beta)
+            out += torch.addmm(x_0, x_0, self.weight2, beta=1. - self.beta,
+                               alpha=self.beta)
+        self.edge_weights = edge_weight
+
+        return out
+
+
+class GCN2Conv_mask(gnn.GCN2Conv):
+    def __innit__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.edge_weights = None
+
+    def forward(self, x: Tensor, x_0: Tensor, edge_index: Adj,
+                edge_weight: OptTensor = None) -> Tensor:
+        """"""
+
+        if self.normalize:
+            if isinstance(edge_index, Tensor):
+                cache = self._cached_edge_index
+                if cache is None:
+                    edge_index, edge_weight = gcn_norm(  # yapf: disable
+                        edge_index, edge_weight, x.size(self.node_dim), False,
+                        self.add_self_loops, dtype=x.dtype)
+                    if self.cached:
+                        self._cached_edge_index = (edge_index, edge_weight)
+                else:
+                    edge_index, edge_weight = cache[0], cache[1]
+
+            elif isinstance(edge_index, SparseTensor):
+                cache = self._cached_adj_t
+                if cache is None:
+                    edge_index = gcn_norm(  # yapf: disable
+                        edge_index, edge_weight, x.size(self.node_dim), False,
+                        self.add_self_loops, dtype=x.dtype)
+                    if self.cached:
+                        self._cached_adj_t = edge_index
+                else:
+                    edge_index = cache
+
+        # propagate_type: (x: Tensor, edge_weight: OptTensor)
+        x = self.propagate(edge_index, x=x, edge_weight=edge_weight, size=None)
+
+        x.mul_(1 - self.alpha)
+        x_0 = self.alpha * x_0[:x.size(0)]
+
+        if self.weight2 is None:
+            out = x.add_(x_0)
+            out = torch.addmm(out, out, self.weight1, beta=1. - self.beta,
+                              alpha=self.beta)
+        else:
+            out = torch.addmm(x, x, self.weight1, beta=1. - self.beta,
+                              alpha=self.beta)
+            out += torch.addmm(x_0, x_0, self.weight2, beta=1. - self.beta,
+                               alpha=self.beta)
+        self.edge_weights = edge_weight
+
+        return out
+
+    def propagate(self, edge_index: Adj, size: Size = None, **kwargs):
+        size = self.__check_input__(edge_index, size)
+
+        # Run "fused" message and aggregation (if applicable).
+        if (isinstance(edge_index, SparseTensor) and self.fuse
+                and not self.__explain__):
+            coll_dict = self.__collect__(self.__fused_user_args__, edge_index,
+                                         size, kwargs)
+
+            msg_aggr_kwargs = self.inspector.distribute(
+                'message_and_aggregate', coll_dict)
+            out = self.message_and_aggregate(edge_index, **msg_aggr_kwargs)
+
+            update_kwargs = self.inspector.distribute('update', coll_dict)
+            return self.update(out, **update_kwargs)
+
+        # Otherwise, run both functions in separation.
+        elif isinstance(edge_index, Tensor) or not self.fuse:
+            coll_dict = self.__collect__(self.__user_args__, edge_index, size,
+                                         kwargs)
+
+            msg_kwargs = self.inspector.distribute('message', coll_dict)
+            out = self.message(**msg_kwargs)
+
+            # For `GNNExplainer`, we require a separate message and aggregate
+            # procedure since this allows us to inject the `edge_mask` into the
+            # message passing computation scheme.
+            if self.__explain__:
+                edge_mask = self.__edge_mask__
+                # Some ops add self-loops to `edge_index`. We need to do the
+                # same for `edge_mask` (but do not train those).
+                if out.size(self.node_dim) != edge_mask.size(0):
+                    loop = edge_mask.new_ones(size[0])
+                    edge_mask = torch.cat([edge_mask, loop], dim=0)
+                assert out.size(self.node_dim) == edge_mask.size(0)
+                out = out * edge_mask.view([-1] + [1] * (out.dim() - 1))
+
+            aggr_kwargs = self.inspector.distribute('aggregate', coll_dict)
+            out = self.aggregate(out, **aggr_kwargs)
+
+            update_kwargs = self.inspector.distribute('update', coll_dict)
+            return self.update(out, **update_kwargs)
+
+class GCN2(GNNBasic):
+    def __init__(self, model_level, dim_node, dim_hidden, num_classes, alpha, theta, num_layers, shared_weights,dropout):
+        super().__init__()
+        convs = []
+        for i in range( num_layers):
+            convs.append(GCN2Conv(dim_hidden, alpha, theta, i + 1))
+        self.convs = nn.ModuleList(
+            convs
+        )
+        self.fcs = nn.ModuleList()
+        self.fcs.append(nn.Linear(dim_node, dim_hidden))
+        self.fcs.append(nn.Linear(dim_hidden, num_classes))
+        self.relu = nn.ReLU()
+        self.dropout = dropout
+        if model_level == 'node':
+            self.readout = IdenticalPool()
+        else:
+            self.readout = GlobalMeanPool()
+
+
+
+    def forward(self, *args, **kwargs) -> torch.Tensor:
+        """
+        :param Required[data]: Batch - input data
+        :return:
+        """
+        x, edge_index, batch = self.arguments_read(*args, **kwargs)
+        x = F.dropout(x, self.dropout, training=self.training)
+        post_conv = self.relu(self.fcs[0](x))
+        x_0 = post_conv
+        for conv in self.convs:
+            x = F.dropout(x, self.dropout, training=self.training)
+            post_conv = self.relu(conv(post_conv, x_0, edge_index))
+
+        out_readout = self.readout(post_conv, batch)
+
+        out = self.fcs[-1](out_readout)
+
+        return out
+
+    def get_emb(self, *args, **kwargs) -> torch.Tensor:
+        x, edge_index, batch = self.arguments_read(*args, **kwargs)
+        post_conv = self.relu(self.fcs[0](x))
+        x_0 = post_conv
+        for conv in self.convs:
+            post_conv = self.relu(conv(post_conv, x_0, edge_index))
+
+class GCN2_mask(GNNBasic):
+    def __init__(self, model_level, dim_node, dim_hidden, num_classes, alpha, theta, num_layers, shared_weights,dropout):
+        super().__init__()
+        convs = []
+        for i in range( num_layers):
+            convs.append(GCN2Conv_mask(dim_hidden, alpha, theta, i + 1))
+        self.convs = nn.ModuleList(
+            convs
+        )
+        self.fcs = nn.ModuleList()
+        self.fcs.append(nn.Linear(dim_node, dim_hidden))
+        self.fcs.append(nn.Linear(dim_hidden, num_classes))
+        self.relu = nn.ReLU()
+        self.dropout = dropout
+        if model_level == 'node':
+            self.readout = IdenticalPool()
+        else:
+            self.readout = GlobalMeanPool()
+
+
+
+    def forward(self, *args, **kwargs) -> torch.Tensor:
+        """
+        :param Required[data]: Batch - input data
+        :return:
+        """
+        x, edge_index, batch = self.arguments_read(*args, **kwargs)
+        x = F.dropout(x, self.dropout, training=self.training)
+        post_conv = self.relu(self.fcs[0](x))
+        x_0 = post_conv
+        for conv in self.convs:
+            x = F.dropout(x, self.dropout, training=self.training)
+            post_conv = self.relu(conv(post_conv, x_0, edge_index))
+
+        out_readout = self.readout(post_conv, batch)
+
+        out = self.fcs[-1](out_readout)
+
+        return out
+
+    def get_emb(self, *args, **kwargs) -> torch.Tensor:
+        x, edge_index, batch = self.arguments_read(*args, **kwargs)
+        post_conv = self.relu(self.fcs[0](x))
+        x_0 = post_conv
+        for conv in self.convs:
+            post_conv = self.relu(conv(post_conv, x_0, edge_index))
