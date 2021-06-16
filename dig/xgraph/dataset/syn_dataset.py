@@ -59,11 +59,11 @@ class SynGraphDataset(InMemoryDataset):
 
     @property
     def raw_dir(self):
-        return osp.join(self.root, self.name, 'raw')
+        return osp.join(self.root, self.name, '/raw/')
 
     @property
     def processed_dir(self):
-        return osp.join(self.root, self.name, 'processed')
+        return osp.join(self.root, self.name, '/processed/')
 
     @property
     def raw_file_names(self):
@@ -73,9 +73,9 @@ class SynGraphDataset(InMemoryDataset):
     def processed_file_names(self):
         return ['data.pt']
 
-    def download(self):
-        url = self.url.format(self.names[self.name][1])
-        path = download_url(url, self.raw_dir)
+    # def download(self):
+    #     url = self.url.format(self.names[self.name][1])
+    #     path = download_url(url, self.raw_dir)
 
     def process(self):
         if self.name.lower() == 'BA_2Motifs'.lower():

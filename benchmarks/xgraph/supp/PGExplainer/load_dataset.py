@@ -238,11 +238,11 @@ class SynGraphDataset(InMemoryDataset):
 
     @property
     def raw_dir(self):
-        return osp.join(self.root, self.name, 'raw')
+        return osp.join(self.root, self.name, '/raw/')
 
     @property
     def processed_dir(self):
-        return osp.join(self.root, self.name, 'processed')
+        return osp.join(self.root, self.name, '/processed/')
 
     @property
     def raw_file_names(self):

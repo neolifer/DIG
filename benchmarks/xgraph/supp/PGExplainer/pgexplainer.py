@@ -5,7 +5,8 @@ Description: The implement of PGExplainer model
 
 from typing import Optional
 from math import sqrt
-
+import sys
+sys.path.append('../')
 import os
 import time
 import torch
