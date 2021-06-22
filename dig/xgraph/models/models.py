@@ -114,7 +114,7 @@ class GCN_2l(GNNBasic):
 
     def __init__(self, model_level, dim_node, dim_hidden, num_classes):
         super().__init__()
-        num_layer = 2
+        num_layer = 4
 
         self.conv1 = GCNConv(dim_node, dim_hidden)
         self.convs = nn.ModuleList(
@@ -141,25 +141,25 @@ class GCN_2l(GNNBasic):
 
         self.dropout = nn.Dropout()
 
-    def forward(self, *args, **kwargs) -> torch.Tensor:
+    def forward(self,data) -> torch.Tensor:
         """
         :param Required[data]: Batch - input data
         :return:
         """
-        x, edge_index, batch = self.arguments_read(*args, **kwargs)
+        x, edge_index = data.x, data.edge_index
 
         post_conv = self.relu1(self.conv1(x, edge_index))
         for conv, relu in zip(self.convs, self.relus):
             post_conv = relu(conv(post_conv, edge_index))
 
-        out_readout = self.readout(post_conv, batch)
+        out_readout = self.readout(post_conv, 0)
 
         out = self.ffn(out_readout)
 
         return out
 
-    def get_emb(self, *args, **kwargs) -> torch.Tensor:
-        x, edge_index, batch = self.arguments_read(*args, **kwargs)
+    def get_emb(self, data) -> torch.Tensor:
+        x, edge_index = data.x, data.edge_index
         post_conv = self.conv1(x, edge_index)
         for conv in self.convs:
             post_conv = conv(post_conv, edge_index)
@@ -232,7 +232,7 @@ class GIN_2l(GNNBasic):
 
     def __init__(self, model_level, dim_node, dim_hidden, num_classes):
         super().__init__()
-        num_layer = 2
+        num_layer = 5
 
         self.conv1 = GINConv(nn.Sequential(nn.Linear(dim_node, dim_hidden), nn.ReLU(),
                                            nn.Linear(dim_hidden, dim_hidden), nn.ReLU()))#,
@@ -264,12 +264,12 @@ class GIN_2l(GNNBasic):
 
         self.dropout = nn.Dropout()
 
-    def forward(self, *args, **kwargs) -> torch.Tensor:
+    def forward(self,data) -> torch.Tensor:
         """
         :param Required[data]: Batch - input data
         :return:
         """
-        x, edge_index, batch = self.arguments_read(*args, **kwargs)
+        x, edge_index = data.x, data.edge_index
 
 
         post_conv = self.conv1(x, edge_index)
@@ -282,8 +282,8 @@ class GIN_2l(GNNBasic):
         out = self.ffn(out_readout)
         return out
 
-    def get_emb(self, *args, **kwargs) -> torch.Tensor:
-        x, edge_index, batch = self.arguments_read(*args, **kwargs)
+    def get_emb(self, data) -> torch.Tensor:
+        x, edge_index = data.x, data.edge_index
         post_conv = self.conv1(x, edge_index)
         for conv in self.convs:
             post_conv = conv(post_conv, edge_index)
@@ -470,7 +470,7 @@ class GCN_2l_mask(GNNBasic):
 
     def __init__(self, model_level, dim_node, dim_hidden, num_classes):
         super().__init__()
-        num_layer = 2
+        num_layer = 4
 
         self.conv1 = GCNConv_mask(dim_node, dim_hidden)
         self.convs = nn.ModuleList(
@@ -969,12 +969,12 @@ class GCN2(GNNBasic):
 
 
 
-    def forward(self, data) -> torch.Tensor:
+    def forward(self, x, edge_index) -> torch.Tensor:
         """
         :param Required[data]: Batch - input data
         :return:
         """
-        x, edge_index = data.x, data.edge_index
+        # x, edge_index = data.x, data.edge_index
         x = F.dropout(x, self.dropout, training=self.training)
         post_conv = self.relu(self.fcs[0](x))
         x_0 = post_conv

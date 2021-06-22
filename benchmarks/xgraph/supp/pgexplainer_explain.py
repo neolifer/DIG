@@ -17,10 +17,10 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--model', default='GCN2', dest='gnn models')
 parser.add_argument('--model_name', default='GCN2')
 parser.add_argument('--model_level', default='node')
-parser.add_argument('--dim_hidden', default=256)
-parser.add_argument('--alpha', default=0.1)
+parser.add_argument('--dim_hidden', default=20)
+parser.add_argument('--alpha', default=0.5)
 parser.add_argument('--theta', default=0.5)
-parser.add_argument('--num_layers', default=64)
+parser.add_argument('--num_layers', default=5)
 parser.add_argument('--shared_weights', default=False)
 parser.add_argument('--dropout', default=0.1)
 parser.add_argument('--dataset_dir', default='./datasets/')
@@ -94,19 +94,20 @@ num_layers=parser.num_layers
 shared_weights=parser.shared_weights
 dropout=parser.dropout
 
-model = GCN2_mask(model_level, dim_node, dim_hidden, num_classes, alpha, theta, num_layers,
-                   shared_weights, dropout)
-# model = GCN_2l_mask(model_level='node', dim_node=dim_node, dim_hidden=300, num_classes=num_classes)
+# model = GCN2_mask(model_level, dim_node, dim_hidden, num_classes, alpha, theta, num_layers,
+#                    shared_weights, dropout)
+model = GCN_2l_mask(model_level='node', dim_node=dim_node, dim_hidden=20, num_classes=num_classes)
 
 model.to(device)
 check_checkpoints()
-ckpt_path = osp.join('checkpoints', 'ba_shapes', 'GCN2','GCN2_best.pth')
+# ckpt_path = osp.join('checkpoints', 'ba_shapes', 'GCN2','GCN2_best.pth')
+ckpt_path = osp.join('checkpoints', 'ba_shapes', 'GCN_2l','GCN_2l_best.pth')
 model.load_state_dict(torch.load(ckpt_path)['net'])
 # ckpt_path = osp.join('checkpoints', 'ba_shapes', 'GCN_2l', '0', 'GCN_2l_best.ckpt')
 # model.load_state_dict(torch.load(ckpt_path)['state_dict'])
 
 from dig.xgraph.method import PGExplainer
-explainer = PGExplainer(model, in_channels=2*dim_hidden, device=device, explain_graph=False)
+explainer = PGExplainer(model, in_channels=3*dim_hidden, device=device, explain_graph=False)
 
 explainer.train_explanation_network(splitted_dataset)
 torch.save(explainer.state_dict(), 'tmp.pt')
@@ -123,16 +124,16 @@ plotutils = PlotUtils(dataset_name='ba_shapes')
 data = dataset[0].cuda()
 node_idx = node_indices[6]
 walks, masks, related_preds = \
-    explainer(data, node_idx=node_idx, y=data.y, top_k=5)
+    explainer(data, node_idx=node_idx, y=data.y, top_k=6)
 
-explainer.visualization(data, edge_mask=masks[0], top_k=5, plot_utils=plotutils, node_idx=node_idx)
+explainer.visualization(data, edge_mask=masks[0], top_k=6, plot_utils=plotutils, node_idx=node_idx)
 
 
 # --- Create data collector and explanation processor ---
 from dig.xgraph.evaluation import XCollector
 x_collector = XCollector()
 
-### Run explainer on the given model and dataset
+## Run explainer on the given model and dataset
 index = -1
 for i, data in enumerate(dataloader):
     for j, node_idx in enumerate(torch.where(data.test_mask)[0].tolist()):
@@ -144,7 +145,7 @@ for i, data in enumerate(dataloader):
             continue
 
         walks, masks, related_preds = \
-            explainer(data, node_idx=node_idx, y=data.y, top_k=5)
+            explainer(data, node_idx=node_idx, y=data.y, top_k=6)
 
         x_collector.collect_data(masks, related_preds)
 

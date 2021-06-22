@@ -33,7 +33,7 @@ class temp_data():
         self.x = x
         self.edge_index = edge_index
 def k_hop_subgraph_with_default_whole_graph(
-        edge_index, node_idx=None, num_hops=3, relabel_nodes=False,
+        edge_index, node_idx=None, num_hops=5, relabel_nodes=False,
         num_nodes=None, flow='source_to_target'):
     r"""Computes the :math:`k`-hop subgraph of :obj:`edge_index` around node
     :attr:`node_idx`.
@@ -177,7 +177,7 @@ class PlotUtils(object):
         nx.draw_networkx_nodes(graph, pos,
                                nodelist=list(graph.nodes()),
                                node_color=colors,
-                               node_size=300)
+                               node_size=60)
         if isinstance(colors, list):
             list_indices = int(np.where(np.array(graph.nodes()) == node_idx)[0])
             node_idx_color = colors[list_indices]
@@ -187,12 +187,12 @@ class PlotUtils(object):
         nx.draw_networkx_nodes(graph, pos=pos,
                                nodelist=[node_idx],
                                node_color=node_idx_color,
-                               node_size=600)
+                               node_size=100)
 
-        nx.draw_networkx_edges(graph, pos, width=3, edge_color=edge_color, arrows=False)
+        nx.draw_networkx_edges(graph, pos, width=1, edge_color=edge_color, arrows=False)
 
         nx.draw_networkx_edges(graph, pos=pos_nodelist,
-                               edgelist=edgelist, width=3,
+                               edgelist=edgelist, width=1,
                                edge_color=subgraph_edge_color,
                                arrows=False)
 
@@ -200,9 +200,11 @@ class PlotUtils(object):
             nx.draw_networkx_labels(graph, pos, labels)
 
         plt.axis('off')
+        plt.figure(1,figsize=(1000,1000), dpi = 2400)
         if title_sentence is not None:
             plt.title('\n'.join(wrap(title_sentence, width=60)))
-        plt.show()
+        # plt.show()
+        plt.savefig('pg_explainer.png')
 
     def plot_ba2motifs(self, graph, nodelist, edgelist=None, figname=None):
         return self.plot_subgraph(graph, nodelist, edgelist=edgelist, figname=figname)
@@ -269,6 +271,7 @@ class PlotUtils(object):
         if un_directed:
             top_k = 2 * top_k
         edge_mask = edge_mask.reshape(-1)
+        print(edge_mask)
         thres_index = max(edge_mask.shape[0] - top_k, 0)
         threshold = float(edge_mask.reshape(-1).sort().values[thres_index])
         hard_edge_mask = (edge_mask >= threshold)
@@ -284,7 +287,7 @@ class PlotUtils(object):
 
     def plot_soft_edge_mask(self, graph, edge_mask, top_k, un_directed, figname, **kwargs):
         edge_index = torch.tensor(list(graph.edges())).T
-        edge_mask = torch.tensor(edge_mask)
+        edge_mask = edge_mask.clone().detach()
         if self.dataset_name.lower() in ['ba_2motifs', 'ba_lrp']:
             nodelist, edgelist = self.get_topk_edges_subgraph(edge_index, edge_mask, top_k, un_directed)
             self.plot_ba2motifs(graph, nodelist, edgelist, figname=figname)
@@ -385,7 +388,7 @@ class PGExplainer(nn.Module):
         std = torch.nn.init.calculate_gain('relu') * sqrt(2.0 / (2 * N))
 
         if edge_mask is None:
-            self.edge_mask = torch.randn(E) * std + init_bias
+            self.edge_mask = torch.nn.Parameter(torch.randn(E) * std + init_bias)
         else:
             self.edge_mask = edge_mask
 
@@ -497,19 +500,21 @@ class PGExplainer(nn.Module):
                 data,
                 embed: Tensor,
                 tmp: float = 1.0,
-                training: bool = False)\
+                training: bool = False,
+                node_index: int = None)\
             -> Tuple[float, Tensor]:
         r""" explain the GNN behavior for graph with explanation network
 
         Args:
             x (:obj:`torch.Tensor`): Node feature matrix with shape
+
               :obj:`[num_nodes, dim_node_feature]`
             edge_index (:obj:`torch.Tensor`): Graph connectivity in COO format
               with shape :obj:`[2, num_edges]`
             embed (:obj:`torch.Tensor`): Node embedding matrix with shape :obj:`[num_nodes, dim_embedding]`
             tmp (:obj`float`): The temperature parameter fed to the sample procedure
             training (:obj:`bool`): Whether in training procedure or not
-
+            node_index(:obj: 'int'): Node index for node classification
         Returns:
             probs (:obj:`torch.Tensor`): The classification probability for graph with edge mask
             edge_mask (:obj:`torch.Tensor`): The probability mask for graph edges
@@ -518,9 +523,10 @@ class PGExplainer(nn.Module):
         feature_dim = embed.shape[1]
         f1 = embed.unsqueeze(1).repeat(1, nodesize, 1).reshape(-1, feature_dim)
         f2 = embed.unsqueeze(0).repeat(nodesize, 1, 1).reshape(-1, feature_dim)
-
         # using the node embedding to calculate the edge weight
         f12self = torch.cat([f1, f2], dim=-1)
+        if isinstance(node_index, int):
+            f12self = torch.cat([f12self,embed[node_index].tile(f12self.shape[0]).reshape(f12self.shape[0], embed[node_index].shape[-1])], dim = -1)
         h = f12self.to(self.device)
         for elayer in self.elayers:
             h = elayer(h)
@@ -530,8 +536,8 @@ class PGExplainer(nn.Module):
 
         # set the symmetric edge weights
         sym_mask = (self.mask_sigmoid + self.mask_sigmoid.transpose(0, 1)) / 2
-        edge_mask = sym_mask[data.edge_index[0], data.edge_index[1]]
-
+        edge_mask = sym_mask[data.edge_index[0], data.edge_index[1]].to(torch.float32)
+        edge_mask = (edge_mask - torch.min(edge_mask)) / (torch.max(edge_mask) - torch.min(edge_mask))
         # inverse the weights before sigmoid in MessagePassing Module
         # edge_mask = inv_sigmoid(edge_mask)
         self.__clear_masks__()
@@ -546,7 +552,7 @@ class PGExplainer(nn.Module):
 
     def train_explanation_network(self, dataset):
         r""" training the explanation network by gradient descent(GD) using Adam optimizer """
-        optimizer = Adam(self.elayers.parameters(), lr=self.lr)
+        optimizer = Adam(self.elayers.parameters(), lr=self.lr, weight_decay=1e-5)
         if self.explain_graph:
             with torch.no_grad():
                 dataset_indices = list(range(len(dataset)))
@@ -562,7 +568,7 @@ class PGExplainer(nn.Module):
 
             # train the mask generator
             duration = 0.0
-            for epoch in range(self.epochs):
+            for epoch in range(10):
                 loss = 0.0
                 pred_list = []
                 tmp = float(self.t0 * np.power(self.t1 / self.t0, epoch / self.epochs))
@@ -607,7 +613,7 @@ class PGExplainer(nn.Module):
 
             # train the mask generator
             duration = 0.0
-            for epoch in range(self.epochs):
+            for epoch in range(10):
                 loss = 0.0
                 optimizer.zero_grad()
                 tmp = float(self.t0 * np.power(self.t1 / self.t0, epoch / self.epochs))
@@ -615,8 +621,9 @@ class PGExplainer(nn.Module):
                 tic = time.perf_counter()
                 for iter_idx, node_idx in tqdm.tqdm(enumerate(x_dict.keys())):
                     data = temp_data(x_dict[node_idx], edge_index_dict[node_idx])
+
                     pred, edge_mask = self.explain(data,
-                                                   emb_dict[node_idx], tmp, training=True)
+                                                   emb_dict[node_idx], tmp, training=True, node_index=node_idx_dict[node_idx])
                     loss_tmp = self.__loss__(pred[node_idx_dict[node_idx]], pred_dict[node_idx])
                     loss_tmp.backward()
                     loss += loss_tmp.item()
@@ -647,6 +654,7 @@ class PGExplainer(nn.Module):
         """
         # set default subgraph with 10 edges
         top_k = kwargs.get('top_k') if kwargs.get('top_k') is not None else 10
+
         y = kwargs.get('y')
         x = data.x.to(self.device)
         edge_index = data.edge_index.to(self.device)
@@ -681,7 +689,8 @@ class PGExplainer(nn.Module):
             new_node_idx = torch.where(subset == node_idx)[0]
             data = temp_data(x, edge_index)
             embed = self.model.get_emb(data)
-            _, edge_mask = self.explain(data, embed, tmp=1.0, training=False)
+
+            _, edge_mask = self.explain(data, embed, tmp=1.0, training=False, node_index=int(new_node_idx))
 
             data = Data(x=x, edge_index=edge_index)
             selected_nodes = calculate_selected_nodes(data, edge_mask, top_k)

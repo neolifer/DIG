@@ -1,7 +1,7 @@
 import sys
 sys.path.append('../../../../')
 # from dig.xgraph.dataset import SynGraphDataset
-from dig.xgraph.models import GCN2
+from dig.xgraph.models import GCN2, GCN_2l
 import torch
 import torch.nn as nn
 from torch.optim import Adam
@@ -42,8 +42,9 @@ def train_NC(parser):
 
 
     data = dataset[0]
-    gnnNets_NC = GCN2(model_level, dim_node, dim_hidden, num_classes, alpha, theta, num_layers,
-                                  shared_weights, dropout)
+    # gnnNets_NC = GCN2(model_level, dim_node, dim_hidden, num_classes, alpha, theta, num_layers,
+    #                               shared_weights, dropout)
+    gnnNets_NC = GCN_2l(model_level, dim_node, dim_hidden, num_classes)
     gnnNets_NC = gnnNets_NC.cuda()
     criterion = nn.CrossEntropyLoss()
     optimizer = Adam(gnnNets_NC.parameters(), lr=parser.lr, weight_decay=parser.wd2)
@@ -155,14 +156,14 @@ class ARGS():
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', default='GCN2', dest='gnn models')
-    parser.add_argument('--model_name', default='GCN2')
+    parser.add_argument('--model_name', default='GCN_2l')
     parser.add_argument('--model_level', default='node')
-    parser.add_argument('--dim_hidden', default=256)
-    parser.add_argument('--alpha', default=0.1)
+    parser.add_argument('--dim_hidden', default=20)
+    parser.add_argument('--alpha', default=0.5)
     parser.add_argument('--theta', default=0.5)
-    parser.add_argument('--num_layers', default=64)
+    parser.add_argument('--num_layers', default=5)
     parser.add_argument('--shared_weights', default=False)
-    parser.add_argument('--dropout', default=0.1)
+    parser.add_argument('--dropout', default=0)
     parser.add_argument('--dataset_dir', default='../datasets/')
     parser.add_argument('--dataset_name', default='BA_shapes')
     parser.add_argument('--epoch', default=1000)
