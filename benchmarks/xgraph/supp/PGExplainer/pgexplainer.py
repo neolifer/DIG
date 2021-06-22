@@ -1,8 +1,3 @@
-"""
-Description: The implement of PGExplainer model
-<https://arxiv.org/abs/2011.04573>
-"""
-
 from typing import Optional
 from math import sqrt
 import sys

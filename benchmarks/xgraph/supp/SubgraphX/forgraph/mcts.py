@@ -1,13 +1,13 @@
 import math
 import torch
 import networkx as nx
-from SubgraphX.Configures import mcts_args
+from Configures import mcts_args
 from torch_geometric.data import Data, Batch
 from torch_geometric.utils import to_networkx
-from SubgraphX.shapley import mc_shapley, l_shapley, mc_l_shapley, gnn_score, NC_mc_l_shapley
+from shapley import mc_shapley, l_shapley, mc_l_shapley, gnn_score, NC_mc_l_shapley
 from functools import partial
 from collections import Counter
-from SubgraphX.pipeline import MCTSNode
+from pipeline import MCTSNode
 
 
 class MCTSNode():
@@ -162,3 +162,4 @@ def reward_func(reward_args, value_func):
                        sample_num=reward_args.sample_num)
     else:
         raise NotImplementedError
+
