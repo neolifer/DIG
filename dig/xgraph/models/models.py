@@ -141,12 +141,12 @@ class GCN_2l(GNNBasic):
 
         self.dropout = nn.Dropout()
 
-    def forward(self,data) -> torch.Tensor:
+    def forward(self,x, edge_index, **kwargs) -> torch.Tensor:
         """
         :param Required[data]: Batch - input data
         :return:
         """
-        x, edge_index = data.x, data.edge_index
+        # x, edge_index = data.x, data.edge_index
 
         post_conv = self.relu1(self.conv1(x, edge_index))
         for conv, relu in zip(self.convs, self.relus):

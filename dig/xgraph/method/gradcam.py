@@ -55,7 +55,7 @@ class GradCAM(WalkBase):
     def __init__(self, model, explain_graph=False):
         super().__init__(model, explain_graph)
 
-    def forward(self, x: Tensor, edge_index: Tensor, **kwargs)\
+    def forward(self,data, **kwargs)\
             -> Union[Tuple[None, List, List[Dict]], Tuple[Dict, List, List[Dict]]]:
         r"""
         Run the explainer for a specific graph instance.
@@ -79,6 +79,7 @@ class GradCAM(WalkBase):
             where each dictionary includes 4 type predicted probabilities.
 
         """
+        x, edge_index = data.x, data.edge_index
         self.model.eval()
         super().forward(x, edge_index)
 
@@ -103,10 +104,10 @@ class GradCAM(WalkBase):
                 self.convs = cls.model.convs
             def forward(self, *args, **kwargs):
                 return self.cls.model(*args, **kwargs)[node_idx].unsqueeze(0)
-        if self.explain_graph:
-            model = self.model
-        else:
-            model = model_node(self)
+        # if self.explain_graph:
+        model = self.model
+        # else:
+        #     model = model_node(self)
         self.explain_method = GraphLayerGradCam(model, model.convs[-1])
         # --- setting end ---
 
