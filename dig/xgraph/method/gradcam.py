@@ -113,7 +113,7 @@ class GradCAM(WalkBase):
 
         masks = []
         for ex_label in ex_labels:
-            attr_wo_relu = self.explain_method.attribute(x, ex_label, additional_forward_args=edge_index)
+            attr_wo_relu = self.explain_method.attribute(data, ex_label, additional_forward_args=edge_index)
             mask = normalize(attr_wo_relu.relu())
             mask = mask.squeeze()
             mask = (mask[self_loop_edge_index[0]] + mask[self_loop_edge_index[1]]) / 2

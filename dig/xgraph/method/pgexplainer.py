@@ -524,9 +524,10 @@ class PGExplainer(nn.Module):
         f1 = embed.unsqueeze(1).repeat(1, nodesize, 1).reshape(-1, feature_dim)
         f2 = embed.unsqueeze(0).repeat(nodesize, 1, 1).reshape(-1, feature_dim)
         # using the node embedding to calculate the edge weight
-        f12self = torch.cat([f1, f2], dim=-1)
         if isinstance(node_index, int):
-            f12self = torch.cat([f12self,embed[node_index].tile(f12self.shape[0]).reshape(f12self.shape[0], embed[node_index].shape[-1])], dim = -1)
+            f12self = torch.cat([f1, f2, embed[node_index].expand(f1.shape[0], embed[node_index].shape[-1])], dim = -1)
+        else:
+            f12self = torch.cat([f1, f2], dim=-1)
         h = f12self.to(self.device)
         for elayer in self.elayers:
             h = elayer(h)
