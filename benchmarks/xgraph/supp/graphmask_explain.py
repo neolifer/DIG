@@ -1,11 +1,12 @@
 import sys
+sys.path.append('../..')
+
 sys.path.append('../../..')
 
-sys.path.append('../../../..')
 
-
-from dig.xgraph.dataset import SynGraphDataset
+# from dig.xgraph.dataset import SynGraphDataset
 from dig.xgraph.models import *
+from dig.xgraph.utils import *
 import torch
 from torch_geometric.data import DataLoader
 from torch_geometric.data import Data, InMemoryDataset, download_url, extract_zip
@@ -20,7 +21,7 @@ parser.add_argument('--model_level', default='node')
 parser.add_argument('--dim_hidden', default=20)
 parser.add_argument('--alpha', default=0.5)
 parser.add_argument('--theta', default=0.5)
-parser.add_argument('--num_layers', default=5)
+parser.add_argument('--num_layers', default=3)
 parser.add_argument('--shared_weights', default=False)
 parser.add_argument('--dropout', default=0.1)
 parser.add_argument('--dataset_dir', default='./datasets/')
@@ -68,6 +69,7 @@ dataset.data.x = dataset.data.x.to(torch.float32)
 dataset.data.x = dataset.data.x[:, :1]
 # dataset.data.y = dataset.data.y[:, 2]
 dim_node = dataset.num_node_features
+
 dim_edge = dataset.num_edge_features
 # num_targets = dataset.num_classes
 num_classes = dataset.num_classes
@@ -97,23 +99,31 @@ dropout=parser.dropout
 
 # model = GCN2_mask(model_level, dim_node, dim_hidden, num_classes, alpha, theta, num_layers,
 #                    shared_weights, dropout)
-model = GCN_2l_mask(model_level='node', dim_node=dim_node, dim_hidden=20, num_classes=num_classes)
+model = GM_GCN(n_layers = num_layers, input_dim = dim_node, hid_dim = dim_hidden, n_classes = num_classes)
 
 model.to(device)
 check_checkpoints()
 # ckpt_path = osp.join('checkpoints', 'ba_shapes', 'GCN2','GCN2_best.pth')
-ckpt_path = osp.join('checkpoints', 'ba_shapes', 'GCN_2l','GCN_2l_best.pth')
+# ckpt_path = osp.join('checkpoints', 'ba_shapes', 'GCN_2l','GCN_2l_best.pth')
+ckpt_path = osp.join('checkpoints', 'ba_shapes', 'GM_GCN','GM_GCN_best.pth')
 model.load_state_dict(torch.load(ckpt_path)['net'])
 # ckpt_path = osp.join('checkpoints', 'ba_shapes', 'GCN_2l', '0', 'GCN_2l_best.ckpt')
 # model.load_state_dict(torch.load(ckpt_path)['state_dict'])
 
-from dig.xgraph.method import PGExplainer
-explainer = PGExplainer(model, in_channels=3*dim_hidden, device=device, explain_graph=False)
+from dig.xgraph.method import GraphMaskExplainer, GraphMaskAdjMatProbe
+message_dims = [dim_hidden for _ in range(num_layers)]
+hidden_dims = [dim_hidden for _ in range(num_layers)]
+vertex_dims = [3*dim_hidden]+[3*dim_hidden for _ in range(num_layers - 1)]
+GraphMask = GraphMaskAdjMatProbe(vertex_dims, message_dims, num_classes, hidden_dims )
+model.cuda()
+GraphMask.cuda()
 
-explainer.train_explanation_network(splitted_dataset)
-torch.save(explainer.state_dict(), 'tmp.pt')
+explainer = GraphMaskExplainer(model, GraphMask)
+
+# explainer.train_graphmask(splitted_dataset)
+# torch.save(GraphMask.state_dict(), 'tmp.pt')
 state_dict = torch.load('tmp.pt')
-explainer.load_state_dict(state_dict)
+GraphMask.load_state_dict(state_dict)
 
 
 from dig.xgraph.method.pgexplainer import PlotUtils
@@ -124,11 +134,11 @@ from dig.xgraph.method.pgexplainer import PlotUtils
 plotutils = PlotUtils(dataset_name='ba_shapes')
 data = dataset[0].cuda()
 node_idx = node_indices[6]
-walks, masks, related_preds = \
-    explainer(data, node_idx=node_idx, y=data.y, top_k=6)
+new_data, subset, new_node_idx, mask= \
+    explainer(data, node_idx=node_idx, y=data.y, top_k=6, visualize = True)
 
-explainer.visualization(data, edge_mask=masks[0], top_k=6, plot_utils=plotutils, node_idx=node_idx)
-
+visualize(new_data, edge_mask=mask, top_k=6, plot_utils=plotutils, node_idx= new_node_idx, vis_name = 'graphmask.png')
+sys.exit()
 
 # --- Create data collector and explanation processor ---
 from dig.xgraph.evaluation import XCollector

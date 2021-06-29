@@ -3,21 +3,26 @@ import torch
 from torch.nn.parameter import Parameter
 import numpy as np
 from torch import sigmoid
-from torch.nn import Linear, ReLU
+from torch.nn import Linear, ReLU, LayerNorm
 import math
 import sys
-import torch.functional as F
+import torch.nn.functional as F
 sys.path.append('../')
 sys.path.append('../..')
 from torch.optim import Adam
 from torch_geometric.data import Data, Batch
 from tqdm import tqdm
 from torch_geometric.utils import to_networkx
-from pgexplainer import k_hop_subgraph_with_default_whole_graph, calculate_selected_nodes
+from .pgexplainer import k_hop_subgraph_with_default_whole_graph, calculate_selected_nodes
 import networkx as nx
 import time
-from models.utils import LagrangianOptimization
+from ..models.utils import LagrangianOptimization
 from .shapley import GnnNets_GC2value_func, GnnNets_NC2value_func, gnn_score
+from torch_geometric.nn import MessagePassing
+from torch.utils.tensorboard import SummaryWriter
+writer = SummaryWriter()
+
+
 
 class temp_data():
     def __init__(self, x, edge_index):
@@ -37,7 +42,7 @@ class HardConcrete(torch.nn.Module):
 
         self.loc_bias = loc_bias
 
-    def forward(self, input_element, summarize_penalty=True, train = False):
+    def forward(self, input_element, summarize_penalty=True, training = True):
         input_element = input_element + self.loc_bias
 
         if self.training:
@@ -55,14 +60,15 @@ class HardConcrete(torch.nn.Module):
             penalty = penalty.mean()
 
         s = s * (self.zeta - self.gamma) + self.gamma
-
+        if not training:
+            return s, penalty
         clipped_s = self.clip(s)
-        if train:
-            if True:
-                hard_concrete = (clipped_s > 0.5).float()
-                clipped_s = clipped_s + (hard_concrete - clipped_s).detach()
 
-            return clipped_s, penalty
+        if True:
+            hard_concrete = (clipped_s > 0.5).float()
+            clipped_s = clipped_s + (hard_concrete - clipped_s).detach()
+
+        return clipped_s, penalty
 
     def clip(self, x, min_val=0, max_val=1):
         return x.clamp(min_val, max_val)
@@ -82,8 +88,9 @@ class GraphMaskAdjMatProbe(torch.nn.Module):
         for v_dim, m_dim, h_dim in zip(vertex_embedding_dims, message_dims, h_dims):
             transform_src = torch.nn.Sequential(
                 Linear(v_dim, h_dim),
+                LayerNorm(h_dim),
                 ReLU(),
-                Linear(h_dim, m_dim),
+                Linear(h_dim, 1),
             )
 
             transforms.append(transform_src)
@@ -112,27 +119,22 @@ class GraphMaskAdjMatProbe(torch.nn.Module):
 
         self.baselines[layer].requires_grad = True
 
-    def forward(self, gnn):
-        latest_vertex_embeddings = gnn.get_latest_vertex_embeddings()
-        adj_mat = gnn.get_latest_adj_mat()
-
+    def forward(self, gnn, training = True):
+        latest_vertex_embeddings = gnn.get_latest_vertex_embedding()
         gates = []
         total_penalty = 0
         for i in range(len(self.transforms)):
             srcs = latest_vertex_embeddings[i]
-
-
             transformed_src = self.transforms[i](srcs)
 
-
-            gate, penalty = self.hard_gates(transformed_src, summarize_penalty=False)
-
-
-            penalty_norm = srcs.shape[0].float()
-            penalty = penalty.sum() / (penalty_norm + 1e-8)
-
-            gates.append(gate)
-            total_penalty += penalty
+            if training:
+                gate, penalty = self.hard_gates(transformed_src.squeeze(-1), summarize_penalty=False, training = training)
+                # penalty_norm = float(srcs.shape[0])
+                # penalty = penalty.sum() / (penalty_norm + 1e-8)
+                gates.append(gate)
+                total_penalty += penalty.sum()
+            else:
+                gates.append(transformed_src)
 
         return gates, self.baselines, total_penalty
 
@@ -141,7 +143,7 @@ class GraphMaskAdjMatProbe(torch.nn.Module):
 
 
 class GraphMaskExplainer(torch.nn.Module):
-    def __init__(self, model, graphmask, epoch, penalty_scaling = 1, allowance = 0.03):
+    def __init__(self, model, graphmask, epoch = 10, penalty_scaling = 2e-5, allowance = 0.03, lr =0.01, num_hops = None):
         super(GraphMaskExplainer, self).__init__()
         self.model = model
         self.graphmask = graphmask
@@ -150,13 +152,32 @@ class GraphMaskExplainer(torch.nn.Module):
         self.loss = torch.nn.CrossEntropyLoss()
         self.penalty_scaling = penalty_scaling
         self.allowance = allowance
+        self.lr = lr
+        self.num_hops = self.update_num_hops(num_hops)
+
+    def update_num_hops(self, num_hops: int):
+        if num_hops is not None:
+            return num_hops
+
+        k = 0
+        for module in self.model.modules():
+            if isinstance(module, MessagePassing):
+                k += 1
+        return k
+
+    def __flow__(self):
+        for module in self.model.modules():
+            if isinstance(module, MessagePassing):
+                return module.flow
+        return 'source_to_target'
 
     def get_subgraph(self, node_idx, x, edge_index, y, **kwargs):
+
         num_nodes, num_edges = x.size(0), edge_index.size(1)
         graph = to_networkx(data=Data(x=x, edge_index=edge_index), to_undirected=True)
 
         subset, edge_index, _, edge_mask = k_hop_subgraph_with_default_whole_graph(
-            node_idx, self.num_hops, edge_index, relabel_nodes=True,
+            edge_index, node_idx, self.num_hops, relabel_nodes=True,
             num_nodes=num_nodes, flow=self.__flow__())
 
         mapping = {int(v): k for k, v in enumerate(subset)}
@@ -170,68 +191,65 @@ class GraphMaskExplainer(torch.nn.Module):
             elif torch.is_tensor(item) and item.size(0) == num_edges:
                 item = item[edge_mask]
             kwargs[key] = item
-        y = y[subset]
+        if y is not None:
+            y = y[subset]
         return x, edge_index, y, subset, kwargs
 
 
 
     def train_graphmask(self, dataset):
 
-        self.graphmask.train()
+
         optimizer = Adam(self.graphmask.parameters(), lr=self.lr, weight_decay=1e-5)
         data = dataset[0]
-        dataset_indices = torch.where(data.train_mask != 0)[0].tolist()
-        x_dict = {}
-        edge_index_dict = {}
-        node_idx_dict = {}
-        pred_dict = {}
-        with torch.no_grad():
-            data = dataset[0]
-            data.to(self.device)
-            self.model.eval()
-            x_dict = {}
-            edge_index_dict = {}
-            node_idx_dict = {}
-            pred_dict = {}
-            for node_idx in tqdm(torch.where(data.train_mask)[0].tolist()):
-                x, edge_index, y, subset, _ = \
-                    self.get_subgraph(node_idx=node_idx, x=data.x, edge_index=data.edge_index, y=data.y)
-                logits = self.model(data)
-                x_dict[node_idx] = x.to(self.device)
-                edge_index_dict[node_idx] = edge_index.to(self.device)
-                node_idx_dict[node_idx] = int(torch.where(subset == node_idx)[0])
-                pred_dict[node_idx] = logits[node_idx_dict[node_idx]].argmax(-1).cpu()
+
+        data.to(self.device)
         duration = 0.0
         lagrangian_optimization = LagrangianOptimization(optimizer,
                                                          self.device
                                                         )
-        for epoch in range(10):
-            loss = 0.0
-            optimizer.zero_grad()
-            tmp = float(self.t0 * np.power(self.t1 / self.t0, epoch / self.epochs))
-            self.graphmask.train()
-            tic = time.perf_counter()
-            for iter_idx, node_idx in tqdm(enumerate(x_dict.keys())):
-                data = temp_data(x_dict[node_idx], edge_index_dict[node_idx])
+
+        for layer in reversed(list(range(len(self.model.convs)))):
+            self.graphmask.enable_layer(layer)
+            for epoch in range(300):
+                loss = 0.0
+                self.graphmask.train()
+                self.model.eval()
+                tic = time.perf_counter()
+                # i = 0
+                # for node_idx in tqdm(torch.where(data.train_mask)[0].tolist()):
+                optimizer.zero_grad()
+                logits = self.model(data)
+                real_pred = F.softmax(logits, dim=-1).argmax(-1)
                 gates, baselines, total_penalty = self.graphmask(self.model)
                 logits = self.model(data, gates, baselines)
                 pred = F.softmax(logits, dim=-1)
-                loss_temp = self.loss(pred[node_idx_dict[node_idx]], pred_dict[node_idx])
+                loss_temp = self.loss(pred, real_pred)
                 g = torch.relu(torch.relu(loss_temp - self.allowance).mean())
                 f = total_penalty*self.penalty_scaling
-                loss_temp = lagrangian_optimization.update(f, g)
-                loss += loss_temp.item()
-
-            optimizer.step()
-            duration += time.perf_counter() - tic
-            print(f'Epoch: {epoch} | Loss: {loss / len(x_dict)}')
-        print(f"training time is {duration:.5}s")
+                loss2 = lagrangian_optimization.update(f, g, self.graphmask)
+                loss += loss2.detach().item()
+                # loss_temp.backward()
+                # optimizer.step()
+                # optimizer.zero_grad()
+                # loss += loss_temp.detach().item()
+                for i in reversed(list(range(3))):
+                    print(gates[i].sum().detach().item())
+                print(loss_temp.detach().item())
+                duration += time.perf_counter() - tic
+                print(f'Layer: {layer} Epoch: {epoch} | Loss: {loss / len(data.train_mask)}')
+                for i in reversed(list(range(3))):
+                    writer.add_scalar(f'Gate{epoch}{i}/train', gates[i].sum().detach().item(), epoch)
+                writer.add_scalar(f'Loss{layer}/train', loss / len(data.train_mask), epoch)
+            print(f"training time is {duration:.5}s")
 
     def forward(self,data, **kwargs):
         top_k = kwargs.get('top_k') if kwargs.get('top_k') is not None else 10
+        visualize = kwargs.get('visualize') if kwargs.get('visualize') is not None else False
 
         y = kwargs.get('y')
         x = data.x.to(self.device)
+
         edge_index = data.edge_index.to(self.device)
         y = y.to(self.device)
         self.model.eval()
@@ -244,12 +262,27 @@ class GraphMaskExplainer(torch.nn.Module):
         probs = probs.squeeze()[node_idx]
         label = y[node_idx]
         # masked value
-        x, edge_index, _, subset, _ = self.get_subgraph(node_idx, x, edge_index)
+
+        x, edge_index, y, subset, _ = self.get_subgraph(node_idx, x, edge_index,y)
         new_node_idx = torch.where(subset == node_idx)[0]
         data = temp_data(x, edge_index)
-        gates, baselines, total_penalty = self.graphmask(self.model)
-        data = Data(x=x, edge_index=edge_index)
-        selected_nodes = calculate_selected_nodes(data, gates, top_k)
+
+        self.model.eval()
+        self.model(data)
+        gates, baselines, total_penalty = self.graphmask(self.model, training = False)
+
+        edge_indexs = self.model.get_last_edge_index()
+        real_gate = []
+
+        for i in range(edge_indexs[2].shape[-1]):
+            temp = edge_indexs[2][:, i]
+            if temp[0] != temp[1]:
+                real_gate.append(i)
+        gates[-1] = gates[-1][real_gate]
+
+
+        data = Data(x=x, edge_index=edge_index,  y = y)
+        selected_nodes = calculate_selected_nodes(data, gates[2], top_k)
         maskout_nodes_list = [node for node in range(data.x.shape[0]) if node not in selected_nodes]
         value_func = GnnNets_NC2value_func(self.model,
                                            node_idx=new_node_idx,
@@ -257,9 +290,12 @@ class GraphMaskExplainer(torch.nn.Module):
         maskout_pred = gnn_score(maskout_nodes_list, data, value_func,
                                  subgraph_building_method='zero_filling')
         sparsity_score = 1 - len(selected_nodes) / data.x.shape[0]
-        pred_mask = [gates]
+        pred_mask = [gates[-1]]
         related_preds = [{
             'maskout': maskout_pred,
             'origin': probs[label],
             'sparsity': sparsity_score}]
-        return None, pred_mask, related_preds
+        if not visualize:
+            return None, pred_mask, related_preds
+        return data, subset, new_node_idx, gates[-1]
+

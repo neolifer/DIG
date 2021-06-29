@@ -5,7 +5,7 @@ from .gnnexplainer import *
 from .gradcam import *
 from .pgexplainer import *
 from .subgraphx import *
-
+from .graphmask import *
 __all__ = [
     'DeepLIFT',
     'GNNExplainer',

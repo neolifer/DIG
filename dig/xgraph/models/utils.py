@@ -6,8 +6,8 @@ Project: GNN_benchmark
 Author: Shurui Gui
 """
 import torch
-
 from torch_geometric.utils.num_nodes import maybe_num_nodes
+
 
 
 
@@ -139,7 +139,7 @@ class LagrangianOptimization:
     batch_size_multiplier = None
     update_counter = 0
 
-    def __init__(self, original_optimizer, device, init_alpha=0.55, min_alpha=-2, max_alpha=30, alpha_optimizer_lr=1e-2, batch_size_multiplier=None):
+    def __init__(self, original_optimizer, device, init_alpha=0.55, min_alpha=-2, max_alpha=30, alpha_optimizer_lr=1e-1, batch_size_multiplier=None):
         self.min_alpha = min_alpha
         self.max_alpha = max_alpha
         self.device = device
@@ -150,7 +150,7 @@ class LagrangianOptimization:
         self.optimizer_alpha = torch.optim.RMSprop([self.alpha], lr=alpha_optimizer_lr, centered=True)
         self.original_optimizer = original_optimizer
 
-    def update(self, f, g):
+    def update(self, f, g, model):
         """
         L(x, lambda) = f(x) + lambda g(x)
 
@@ -159,19 +159,19 @@ class LagrangianOptimization:
         :return:
         """
 
-        if self.batch_size_multiplier is not None and self.batch_size_multiplier > 1:
-            if self.update_counter % self.batch_size_multiplier == 0:
-                self.original_optimizer.zero_grad()
-                self.optimizer_alpha.zero_grad()
-
-            self.update_counter += 1
-        else:
-            self.original_optimizer.zero_grad()
-            self.optimizer_alpha.zero_grad()
+        # if self.batch_size_multiplier is not None and self.batch_size_multiplier > 1:
+        #     if self.update_counter % self.batch_size_multiplier == 0:
+        #         self.original_optimizer.zero_grad()
+        #         self.optimizer_alpha.zero_grad()
+        #
+        #     self.update_counter += 1
+        # else:
+        #     self.original_optimizer.zero_grad()
+        #     self.optimizer_alpha.zero_grad()
 
         loss = f + torch.nn.functional.softplus(self.alpha) * g
         loss.backward()
-
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
         if self.batch_size_multiplier is not None and self.batch_size_multiplier > 1:
             if self.update_counter % self.batch_size_multiplier == 0:
                 self.original_optimizer.step()
@@ -182,7 +182,12 @@ class LagrangianOptimization:
             self.alpha.grad *= -1
             self.optimizer_alpha.step()
 
+
         if self.alpha.item() < -2:
             self.alpha.data = torch.full_like(self.alpha.data, -2)
         elif self.alpha.item() > 30:
             self.alpha.data = torch.full_like(self.alpha.data, 30)
+        return loss
+
+
+

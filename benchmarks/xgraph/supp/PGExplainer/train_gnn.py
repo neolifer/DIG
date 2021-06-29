@@ -1,7 +1,7 @@
 import sys
 sys.path.append('../../../../')
 # from dig.xgraph.dataset import SynGraphDataset
-from dig.xgraph.models import GCN2, GCN_2l
+from dig.xgraph.models import GCN2, GCN_2l, GM_GCN
 import torch
 import torch.nn as nn
 from torch.optim import Adam
@@ -44,7 +44,8 @@ def train_NC(parser):
     data = dataset[0]
     # gnnNets_NC = GCN2(model_level, dim_node, dim_hidden, num_classes, alpha, theta, num_layers,
     #                               shared_weights, dropout)
-    gnnNets_NC = GCN_2l(model_level, dim_node, dim_hidden, num_classes)
+    # gnnNets_NC = GCN_2l(model_level, dim_node, dim_hidden, num_classes)
+    gnnNets_NC = GM_GCN(num_layers, dim_node, dim_hidden, num_classes)
     gnnNets_NC = gnnNets_NC.cuda()
     criterion = nn.CrossEntropyLoss()
     optimizer = Adam(gnnNets_NC.parameters(), lr=parser.lr, weight_decay=parser.wd2)
@@ -109,7 +110,7 @@ def evaluate_NC(data, gnnNets_NC, criterion):
         for key in ['train', 'val', 'test']:
             mask = data['{}_mask'.format(key)]
             logits= gnnNets_NC(data)
-            probs = F.softmax(logits)
+            probs = F.softmax(logits, dim =-1)
             loss = criterion(logits[mask], data.y[mask]).item()
             pred = logits[mask].max(1)[1]
             acc = pred.eq(data.y[mask]).sum().item() / mask.sum().item()
@@ -156,12 +157,12 @@ class ARGS():
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', default='GCN2', dest='gnn models')
-    parser.add_argument('--model_name', default='GCN_2l')
+    parser.add_argument('--model_name', default='GM_GCN')
     parser.add_argument('--model_level', default='node')
     parser.add_argument('--dim_hidden', default=20)
     parser.add_argument('--alpha', default=0.5)
     parser.add_argument('--theta', default=0.5)
-    parser.add_argument('--num_layers', default=5)
+    parser.add_argument('--num_layers', default=3)
     parser.add_argument('--shared_weights', default=False)
     parser.add_argument('--dropout', default=0)
     parser.add_argument('--dataset_dir', default='../datasets/')

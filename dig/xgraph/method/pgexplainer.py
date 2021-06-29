@@ -61,6 +61,7 @@ def k_hop_subgraph_with_default_whole_graph(
     num_nodes = maybe_num_nodes(edge_index, num_nodes)
 
     assert flow in ['source_to_target', 'target_to_source']
+
     if flow == 'target_to_source':
         row, col = edge_index
     else:
@@ -204,7 +205,7 @@ class PlotUtils(object):
         if title_sentence is not None:
             plt.title('\n'.join(wrap(title_sentence, width=60)))
         # plt.show()
-        plt.savefig('pg_explainer.png')
+        plt.savefig('graphmask.png')
 
     def plot_ba2motifs(self, graph, nodelist, edgelist=None, figname=None):
         return self.plot_subgraph(graph, nodelist, edgelist=edgelist, figname=figname)
