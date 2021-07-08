@@ -1,4 +1,6 @@
 import torch.nn as nn
+import sys
+sys.path.append('../..')
 from SubgraphX.models.GCN import GCNNet, GCNNet_NC
 from SubgraphX.models.GAT import GATNet, GATNet_NC
 from SubgraphX.models.GIN import GINNet, GINNet_NC

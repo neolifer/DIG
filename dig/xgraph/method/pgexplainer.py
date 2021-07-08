@@ -523,7 +523,9 @@ class PGExplainer(nn.Module):
         nodesize = embed.shape[0]
         feature_dim = embed.shape[1]
         f1 = embed.unsqueeze(1).repeat(1, nodesize, 1).reshape(-1, feature_dim)
+        # f1 = embed[data.edge_index[0]]
         f2 = embed.unsqueeze(0).repeat(nodesize, 1, 1).reshape(-1, feature_dim)
+        # f2 = embed[data.edge_index[1]]
         # using the node embedding to calculate the edge weight
         if isinstance(node_index, int):
             f12self = torch.cat([f1, f2, embed[node_index].expand(f1.shape[0], embed[node_index].shape[-1])], dim = -1)
@@ -533,6 +535,7 @@ class PGExplainer(nn.Module):
         for elayer in self.elayers:
             h = elayer(h)
         values = h.reshape(-1)
+        print(h.shape, f1.shape)
         values = self.concrete_sample(values, beta=tmp, training=training)
         self.mask_sigmoid = values.reshape(nodesize, nodesize)
 

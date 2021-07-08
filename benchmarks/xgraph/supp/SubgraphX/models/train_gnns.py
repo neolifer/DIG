@@ -4,6 +4,9 @@ import shutil
 import numpy as np
 import torch.nn as nn
 from torch.optim import Adam
+import sys
+
+sys.path.append('..')
 from models import GnnNets, GnnNets_NC
 from load_dataset import get_dataset, get_dataloader
 from Configures import data_args, train_args, model_args
@@ -12,6 +15,7 @@ from Configures import data_args, train_args, model_args
 def train_MUTAG():
     # attention the multi-task here
     print('start loading data====================')
+
     dataset = get_dataset(data_args)
     input_dim = dataset.num_node_features
     output_dim = int(dataset.num_classes)
@@ -242,7 +246,8 @@ def predict_GC(test_dataloader, gnnNets):
 # train for node classification task
 def train_NC():
     print('start loading data====================')
-    import pdb; pdb.set_trace()
+    # import pdb; pdb.set_trace()
+    data_args['dataset_name'] = 'BA_shapes'
     dataset = get_dataset(data_args)
     input_dim = dataset.num_node_features
     output_dim = int(dataset.num_classes)

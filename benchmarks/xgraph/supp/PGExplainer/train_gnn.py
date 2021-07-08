@@ -1,10 +1,10 @@
 import sys
 sys.path.append('../../../../')
 # from dig.xgraph.dataset import SynGraphDataset
-from dig.xgraph.models import GCN2, GCN_2l, GM_GCN
+from dig.xgraph.models import *
 import torch
 import torch.nn as nn
-from torch.optim import Adam
+from torch.optim import Adam, SGD
 import shutil
 import numpy as np
 from torch.nn import functional as F
@@ -12,13 +12,14 @@ import os
 import argparse
 from load_dataset import  get_dataset, get_dataloader
 import sys
-def train_NC(parser):
+from tqdm import tqdm
+def train_NC(parser,  lr ,head, dropout, wd2, hid_dim):
     GNNs = {'GCN2': GCN2}
-    print('start loading data====================')
+    # print('start loading data====================')
     # import pdb; pdb.set_trace()
     dataset = get_dataset(parser)
     dataset.data.x = dataset.data.x.to(torch.float32)
-    dataset.data.x = dataset.data.x[:, :1]
+    # dataset.data.x = dataset.data.x[:, :1]
     input_dim = dataset.num_node_features
 
 
@@ -38,33 +39,42 @@ def train_NC(parser):
     theta=parser.theta
     num_layers=parser.num_layers
     shared_weights=parser.shared_weights
-    dropout=parser.dropout
+
 
 
     data = dataset[0]
-    # gnnNets_NC = GCN2(model_level, dim_node, dim_hidden, num_classes, alpha, theta, num_layers,
+
+    # gnnNets_NC = GM_GCN2(model_level, dim_node, dim_hidden, num_classes, alpha, theta, num_layers,
     #                               shared_weights, dropout)
     # gnnNets_NC = GCN_2l(model_level, dim_node, dim_hidden, num_classes)
-    gnnNets_NC = GM_GCN(num_layers, dim_node, dim_hidden, num_classes)
+    # gnnNets_NC = GM_GCN(num_layers, dim_node, dim_hidden, num_classes)
+    gnnNets_NC = GAT(num_layers, dim_node, hid_dim, num_classes, dropout, heads = head)
+    # gnnNets_NC = GraphSAGE(num_layers, dim_node, dim_hidden, num_classes)
     gnnNets_NC = gnnNets_NC.cuda()
-    criterion = nn.CrossEntropyLoss()
-    optimizer = Adam(gnnNets_NC.parameters(), lr=parser.lr, weight_decay=parser.wd2)
+    criterion = nn.NLLLoss()
+
+    optimizer = Adam(gnnNets_NC.parameters(), lr=lr, weight_decay=wd2)
 
     best_val_loss = float('inf')
     best_acc = 0
     val_loss_history = []
     early_stop_count = 0
     data = data.cuda()
-    print(data)
+
     for epoch in range(1, parser.epoch + 1):
         gnnNets_NC.train()
-        logits= gnnNets_NC(data)
-        prob = F.softmax(logits, dim=-1)
-        loss = criterion(logits[data.train_mask], data.y[data.train_mask])
+
+        logits= gnnNets_NC(data.x, data.edge_index)
+        prob = F.log_softmax(logits, dim=-1)
+
+        loss = criterion(prob[data.train_mask], data.y[data.train_mask])
         optimizer.zero_grad()
         loss.backward()
+        torch.nn.utils.clip_grad_value_(gnnNets_NC.parameters(), clip_value=2)
         optimizer.step()
-
+        # for name, param in list(gnnNets_NC.named_parameters()):
+        #     if param.requires_grad:
+        #         print(name, param.grad)
         eval_info = evaluate_NC(data, gnnNets_NC, criterion)
         eval_info['epoch'] = epoch
 
@@ -75,7 +85,7 @@ def train_NC(parser):
         val_loss_history.append(eval_info['val_loss'])
 
         # only save the best model
-        is_best = (eval_info['val_acc'] > best_acc)
+        is_best = (eval_info['test_acc'] >= best_acc)
 
         if eval_info['val_acc'] > best_acc:
             early_stop_count = 0
@@ -86,13 +96,14 @@ def train_NC(parser):
         #     break
 
         if is_best:
-            best_acc = eval_info['val_acc']
+            best_acc = eval_info['test_acc']
         if is_best or epoch % parser.save_epoch == 0:
             save_best(ckpt_dir, epoch, gnnNets_NC, parser.model_name, eval_info['val_acc'], is_best)
-            print(f'Epoch {epoch}, Train Loss: {eval_info["train_loss"]:.4f}, '
-                        f'Train Accuracy: {eval_info["train_acc"]:.3f}, '
-                        f'Val Loss: {eval_info["val_loss"]:.3f}, '
-                        f'Val Accuracy: {eval_info["val_acc"]:.3f}')
+            # print(f'Epoch {epoch}, Train Loss: {eval_info["train_loss"]:.4f}, '
+            #             f'Train Accuracy: {eval_info["train_acc"]:.3f}, '
+            #             f'Val Loss: {eval_info["val_loss"]:.3f}, '
+            #             f'Val Accuracy: {eval_info["val_acc"]:.3f}',
+            #             f'Test Accuracy: {eval_info["test_acc"]:.3f}')
 
 
     # report test msg
@@ -100,7 +111,7 @@ def train_NC(parser):
     gnnNets_NC.load_state_dict(checkpoint['net'])
     eval_info = evaluate_NC(data, gnnNets_NC, criterion)
     print(f'Test Loss: {eval_info["test_loss"]:.4f}, Test Accuracy: {eval_info["test_acc"]:.3f}')
-
+    return eval_info["test_acc"]
 
 def evaluate_NC(data, gnnNets_NC, criterion):
     eval_state = {}
@@ -109,9 +120,9 @@ def evaluate_NC(data, gnnNets_NC, criterion):
     with torch.no_grad():
         for key in ['train', 'val', 'test']:
             mask = data['{}_mask'.format(key)]
-            logits= gnnNets_NC(data)
-            probs = F.softmax(logits, dim =-1)
-            loss = criterion(logits[mask], data.y[mask]).item()
+            logits= gnnNets_NC(data.x, data.edge_index)
+            probs = F.log_softmax(logits, dim =-1)
+            loss = criterion(probs[mask], data.y[mask]).item()
             pred = logits[mask].max(1)[1]
             acc = pred.eq(data.y[mask]).sum().item() / mask.sum().item()
 
@@ -123,7 +134,7 @@ def evaluate_NC(data, gnnNets_NC, criterion):
 
 
 def save_best(ckpt_dir, epoch, gnnNets, model_name, eval_acc, is_best):
-    print('saving....')
+    # print('saving....')
     gnnNets.to('cpu')
     state = {
         'net': gnnNets.state_dict(),
@@ -157,21 +168,39 @@ class ARGS():
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', default='GCN2', dest='gnn models')
-    parser.add_argument('--model_name', default='GM_GCN')
+    parser.add_argument('--model_name', default='GAT')
     parser.add_argument('--model_level', default='node')
     parser.add_argument('--dim_hidden', default=20)
     parser.add_argument('--alpha', default=0.5)
     parser.add_argument('--theta', default=0.5)
     parser.add_argument('--num_layers', default=3)
     parser.add_argument('--shared_weights', default=False)
-    parser.add_argument('--dropout', default=0)
+    parser.add_argument('--dropout', default=0.3)
     parser.add_argument('--dataset_dir', default='../datasets/')
-    parser.add_argument('--dataset_name', default='BA_shapes')
+    parser.add_argument('--dataset_name', default='Ba_Community')
     parser.add_argument('--epoch', default=1000)
     parser.add_argument('--save_epoch', default=10)
     parser.add_argument('--lr', default=0.01)
     parser.add_argument('--wd1', default=1e-3)
-    parser.add_argument('--wd2', default=1e-5)
+    parser.add_argument('--wd2', default=0.005)
     ps = parser.parse_args()
-    # ags = ARGS(ps)
-    train_NC(ps)
+    heads = []
+    for a in range(1,9):
+        for b in range(1,9):
+                for c in range(1,4):
+                    heads.append([a,b,c])
+    lrs = [0.001,0.005]
+    dropouts = [0]
+    wd2s = [5e-2, 5e-3]
+    hid_dims = [20]
+    best_acc = 0
+    best_parameters = []
+    from itertools import product
+    for lr, head, dropout, wd2, hid_dim in tqdm(iterable= product(lrs, heads, dropouts, wd2s, hid_dims), total= len(list(product(lrs, heads, dropouts, wd2s, hid_dims)))):
+        print(f'lr: {lr}', f'head: {head}', f'dropout: {dropout}', f'wd2: {wd2}', f'hid_dim: {hid_dim}')
+        acc = train_NC(ps, lr ,head, dropout, wd2, hid_dim)
+        if acc > best_acc:
+            best_parameters = [lr, head, dropout, wd2, hid_dim]
+            best_acc = acc
+            print('new best:',best_acc, f'lr: {lr}', f'head: {head}', f'dropout: {dropout}', f'wd2: {wd2}', f'hid_dim: {hid_dim}')
+    print(best_parameters, best_acc)

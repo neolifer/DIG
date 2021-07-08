@@ -10,8 +10,8 @@ import torch.nn.functional as F
 sys.path.append('../')
 sys.path.append('../..')
 from torch.optim import Adam
-from torch_geometric.data import Data, Batch
-from tqdm import tqdm
+from torch_geometric.data import Data, Batch,DataLoader
+import tqdm
 from torch_geometric.utils import to_networkx
 from .pgexplainer import k_hop_subgraph_with_default_whole_graph, calculate_selected_nodes
 import networkx as nx
@@ -20,16 +20,33 @@ from ..models.utils import LagrangianOptimization
 from .shapley import GnnNets_GC2value_func, GnnNets_NC2value_func, gnn_score
 from torch_geometric.nn import MessagePassing
 from torch.utils.tensorboard import SummaryWriter
+
 writer = SummaryWriter()
 
 
-
-class temp_data():
-    def __init__(self, x, edge_index):
+# 
+# class Temp_data(Data):
+#     def __init__(self, x=None, edge_index=None, edge_attr=None, y=None,
+#                  pos=None, normal=None, face=None, node_idx = None,**kwargs):
+#         super(Data).__init__()
+#         self.node_idx = node_idx
+#     def __inc__(self, key, value):
+#         if key == 'node_idx':
+#             return self.node_idx.size(0)
+#         else:
+#             return super(Data).__inc__(key, value)
+class Temp_data(Data):
+    def __init__(self, x=None, edge_index=None, edge_attr=None, y=None,
+                pos=None, normal=None, face=None, node_idx = None,**kwargs):
+        super(Temp_data, self).__init__()
         self.x = x
         self.edge_index = edge_index
-
-
+        self.node_idx = node_idx
+    def __inc__(self, key, value):
+        if key == 'node_idx':
+            return self.node_idx.size(0)
+        else:
+            return super(Temp_data, self).__inc__(key, value)
 class HardConcrete(torch.nn.Module):
 
     def __init__(self, beta=1 / 3, gamma=-0.2, zeta=1.0, fix_temp=True, loc_bias=3):
@@ -143,13 +160,13 @@ class GraphMaskAdjMatProbe(torch.nn.Module):
 
 
 class GraphMaskExplainer(torch.nn.Module):
-    def __init__(self, model, graphmask, epoch = 10, penalty_scaling = 2e-5, allowance = 0.03, lr =0.01, num_hops = None):
+    def __init__(self, model, graphmask, epoch = 10, penalty_scaling = 1e-5, allowance = 0.03, lr =0.01, num_hops = None):
         super(GraphMaskExplainer, self).__init__()
         self.model = model
         self.graphmask = graphmask
         self.epoch = epoch
         self.device = 'cuda:0'
-        self.loss = torch.nn.CrossEntropyLoss()
+        self.loss = torch.nn.NLLLoss()
         self.penalty_scaling = penalty_scaling
         self.allowance = allowance
         self.lr = lr
@@ -204,43 +221,59 @@ class GraphMaskExplainer(torch.nn.Module):
         data = dataset[0]
 
         data.to(self.device)
-        duration = 0.0
+
         lagrangian_optimization = LagrangianOptimization(optimizer,
                                                          self.device
                                                         )
+        with torch.no_grad():
+            self.model.eval()
 
+            datalist = []
+            for node_idx in tqdm.tqdm(torch.where(data.train_mask)[0].tolist()):
+                x, edge_index, y, subset, _ = \
+                    self.get_subgraph(node_idx=node_idx, x=data.x, edge_index=data.edge_index, y=data.y)
+                datalist.append(Temp_data(x = x, edge_index = edge_index, node_idx = torch.Tensor([node_idx])))
+        loader = DataLoader(datalist, batch_size=560)
         for layer in reversed(list(range(len(self.model.convs)))):
             self.graphmask.enable_layer(layer)
-            for epoch in range(300):
+            duration = 0.0
+            for epoch in range(10):
                 loss = 0.0
                 self.graphmask.train()
                 self.model.eval()
                 tic = time.perf_counter()
-                # i = 0
-                # for node_idx in tqdm(torch.where(data.train_mask)[0].tolist()):
-                optimizer.zero_grad()
-                logits = self.model(data)
-                real_pred = F.softmax(logits, dim=-1).argmax(-1)
-                gates, baselines, total_penalty = self.graphmask(self.model)
-                logits = self.model(data, gates, baselines)
-                pred = F.softmax(logits, dim=-1)
-                loss_temp = self.loss(pred, real_pred)
-                g = torch.relu(torch.relu(loss_temp - self.allowance).mean())
-                f = total_penalty*self.penalty_scaling
-                loss2 = lagrangian_optimization.update(f, g, self.graphmask)
-                loss += loss2.detach().item()
-                # loss_temp.backward()
-                # optimizer.step()
-                # optimizer.zero_grad()
-                # loss += loss_temp.detach().item()
+
+                for batch in tqdm.tqdm(loader):
+                    optimizer.zero_grad()
+                    x, edge_index, node_idx = batch.x, batch.edge_index, batch.node_idx
+                    x.to('cuda:0')
+                    edge_index.to('cuda:0')
+                    node_idx.to('cuda:0')
+
+                    logits = self.model(x, edge_index)
+                    real_pred = logits.argmax(-1)
+                    gates, baselines, total_penalty = self.graphmask(self.model)
+                    logits = self.model(x,edge_index, gates, baselines)
+                    pred = F.log_softmax(logits, dim=-1)
+                    # print(real_pred.shape, pred.shape)
+                    # sys.exit()
+                    loss_temp = self.loss(pred, real_pred)
+                    g = torch.relu(loss_temp - self.allowance).mean()
+                    f = total_penalty*self.penalty_scaling
+                    loss2 = lagrangian_optimization.update(f, g, self.graphmask)
+                    loss += loss2.detach().item()
+                    # loss_temp.backward()
+                    # optimizer.step()
+                    # optimizer.zero_grad()
+                    # loss += loss_temp.detach().item()
+                    duration += time.perf_counter() - tic
                 for i in reversed(list(range(3))):
                     print(gates[i].sum().detach().item())
                 print(loss_temp.detach().item())
-                duration += time.perf_counter() - tic
                 print(f'Layer: {layer} Epoch: {epoch} | Loss: {loss / len(data.train_mask)}')
-                for i in reversed(list(range(3))):
-                    writer.add_scalar(f'Gate{epoch}{i}/train', gates[i].sum().detach().item(), epoch)
-                writer.add_scalar(f'Loss{layer}/train', loss / len(data.train_mask), epoch)
+                    # for i in reversed(list(range(3))):
+                    #     writer.add_scalar(f'Gate{epoch}{i}/train', gates[i].sum().detach().item(), epoch)
+                    # writer.add_scalar(f'Loss{layer}/train', loss / len(data.train_mask), epoch)
             print(f"training time is {duration:.5}s")
 
     def forward(self,data, **kwargs):
@@ -254,7 +287,7 @@ class GraphMaskExplainer(torch.nn.Module):
         y = y.to(self.device)
         self.model.eval()
         self.graphmask.eval()
-        logits = self.model(data)
+        logits = self.model(data.x, data.edge_index)
         probs = F.softmax(logits, dim=-1)
         node_idx = kwargs.get('node_idx')
         assert kwargs.get('node_idx') is not None, "please input the node_idx"
@@ -265,10 +298,10 @@ class GraphMaskExplainer(torch.nn.Module):
 
         x, edge_index, y, subset, _ = self.get_subgraph(node_idx, x, edge_index,y)
         new_node_idx = torch.where(subset == node_idx)[0]
-        data = temp_data(x, edge_index)
+
 
         self.model.eval()
-        self.model(data)
+        self.model(x, edge_index)
         gates, baselines, total_penalty = self.graphmask(self.model, training = False)
 
         edge_indexs = self.model.get_last_edge_index()

@@ -102,14 +102,15 @@ num_layers=parser.num_layers
 shared_weights=parser.shared_weights
 dropout=parser.dropout
 
-model = GCN2(model_level, dim_node, dim_hidden, num_classes, alpha, theta, num_layers,
-shared_weights, dropout)
+# model = GCN2(model_level, dim_node, dim_hidden, num_classes, alpha, theta, num_layers,
+# shared_weights, dropout)
 # model = GCN_2l(model_level='node', dim_node=dim_node, dim_hidden=300, num_classes=num_classes)
+model = GAT(model_level='node', dim_node=dim_node, dim_hidden=300, num_classes=num_classes)
 model.to(device)
 check_checkpoints()
 # ckpt_path = osp.join('checkpoints', 'ba_shapes', 'GIN_2l', '0', 'GIN_2l_best.ckpt')
 # model.load_state_dict(torch.load(ckpt_path)['state_dict'])
-ckpt_path = osp.join('checkpoints', 'ba_shapes', 'GCN2','GCN2_best.pth')
+# ckpt_path = osp.join('checkpoints', 'ba_shapes', 'GCN2','GCN2_best.pth')
 # ckpt_path = osp.join('checkpoints', 'ba_shapes', 'GCN_2l','GCN_2l_best.pth')
 model.load_state_dict(torch.load(ckpt_path)['net'])
 # from dig.xgraph.method import GNNExplainer

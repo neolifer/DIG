@@ -632,7 +632,8 @@ class SubgraphX(object):
         # collect all the class index
         labels = tuple(label for label in range(self.num_classes))
         ex_labels = tuple(torch.tensor([label]).to(self.device) for label in labels)
-        logits = self.model(x, edge_index)
+        data = Data(x = x, edge_index = edge_index)
+        logits = self.model(data)
         probs = F.softmax(logits, dim=-1)
         probs = probs.squeeze()
         explanation_results = []
