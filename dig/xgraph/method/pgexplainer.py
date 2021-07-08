@@ -94,6 +94,8 @@ def k_hop_subgraph_with_default_whole_graph(
             node_idx = node_idx.to(row.device)
 
         subsets = [node_idx]
+        if num_hops > 3:
+            num_hops = 3
         for _ in range(num_hops):
             node_mask.fill_(False)
             node_mask[subsets[-1]] = True
@@ -298,7 +300,7 @@ class PlotUtils(object):
             nodelist, edgelist = self.get_topk_edges_subgraph(edge_index, edge_mask, top_k, un_directed)
             self.plot_molecule(graph, nodelist, x, edgelist, figname=figname)
 
-        elif self.dataset_name.lower() in ['ba_shapes', 'ba_shapes', 'tree_grid', 'tree_cycle']:
+        elif self.dataset_name.lower() in ['ba_shapes', 'ba_community', 'tree_grid', 'tree_cycle']:
             y = kwargs.get('y')
             node_idx = kwargs.get('node_idx')
             nodelist, edgelist = self.get_topk_edges_subgraph(edge_index, edge_mask, top_k, un_directed)

@@ -91,7 +91,7 @@ class GM_GCN(nn.Module):
         self.outlayer = nn.Linear(hid_dim, n_classes)
         self.relu = nn.ReLU()
         self.dropout = nn.Dropout(dropout)
-        self.bn = nn.BatchNorm1d(hid_dim)
+        # self.bn = nn.BatchNorm1d(hid_dim)
         for conv in self.convs:
             conv.chache = None
 
@@ -101,7 +101,7 @@ class GM_GCN(nn.Module):
         if message_scales and message_replacement:
             for i, conv in enumerate(self.convs):
                 x = conv(x, edge_index,message_scale=message_scales[i], message_replacement=message_replacement[i])
-                x = self.bn(x)
+                # x = self.bn(x)
                 x = self.relu(x)
                 x = self.dropout(x)
             x = self.outlayer(x)
@@ -115,10 +115,20 @@ class GM_GCN(nn.Module):
         x = self.outlayer(x)
         return x
 
+    def get_emb(self,*args):
+        if len(args) == 1:
+            x, edge_index = args[0].x, args[0].edge_index
+        else:
+            x, edge_index = args[0], args[1]
+        for conv in self.convs:
+            x = conv(x, edge_index)
+            x = self.relu(x)
+        return x
     def get_latest_vertex_embedding(self):
         self.latest_vertex_embeddings = []
         for conv in self.convs:
             self.latest_vertex_embeddings.append(conv.get_latest_vertex_embedding())
+            conv.latest_vertex_embeddings = None
         return self.latest_vertex_embeddings
 
     def get_message_dim(self):

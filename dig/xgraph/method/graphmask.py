@@ -138,10 +138,12 @@ class GraphMaskAdjMatProbe(torch.nn.Module):
 
     def forward(self, gnn, training = True):
         latest_vertex_embeddings = gnn.get_latest_vertex_embedding()
+        gnn.latest_vertex_embeddings = None
         gates = []
         total_penalty = 0
         for i in range(len(self.transforms)):
             srcs = latest_vertex_embeddings[i]
+            latest_vertex_embeddings[i] = None
             transformed_src = self.transforms[i](srcs)
 
             if training:
@@ -233,7 +235,7 @@ class GraphMaskExplainer(torch.nn.Module):
                 x, edge_index, y, subset, _ = \
                     self.get_subgraph(node_idx=node_idx, x=data.x, edge_index=data.edge_index, y=data.y)
                 datalist.append(Temp_data(x = x, edge_index = edge_index, node_idx = torch.Tensor([node_idx])))
-        loader = DataLoader(datalist, batch_size=560)
+        loader = DataLoader(datalist, batch_size=28, shuffle= True)
         for layer in reversed(list(range(len(self.model.convs)))):
             self.graphmask.enable_layer(layer)
             duration = 0.0
@@ -251,7 +253,7 @@ class GraphMaskExplainer(torch.nn.Module):
                     node_idx.to('cuda:0')
 
                     logits = self.model(x, edge_index)
-                    real_pred = logits.argmax(-1)
+                    real_pred = logits.argmax(-1).detach()
                     gates, baselines, total_penalty = self.graphmask(self.model)
                     logits = self.model(x,edge_index, gates, baselines)
                     pred = F.log_softmax(logits, dim=-1)
@@ -267,9 +269,8 @@ class GraphMaskExplainer(torch.nn.Module):
                     # optimizer.zero_grad()
                     # loss += loss_temp.detach().item()
                     duration += time.perf_counter() - tic
-                for i in reversed(list(range(3))):
-                    print(gates[i].sum().detach().item())
-                print(loss_temp.detach().item())
+                    torch.cuda.empty_cache()
+
                 print(f'Layer: {layer} Epoch: {epoch} | Loss: {loss / len(data.train_mask)}')
                     # for i in reversed(list(range(3))):
                     #     writer.add_scalar(f'Gate{epoch}{i}/train', gates[i].sum().detach().item(), epoch)

@@ -47,8 +47,8 @@ def train_NC(parser,  lr ,head, dropout, wd2, hid_dim):
     # gnnNets_NC = GM_GCN2(model_level, dim_node, dim_hidden, num_classes, alpha, theta, num_layers,
     #                               shared_weights, dropout)
     # gnnNets_NC = GCN_2l(model_level, dim_node, dim_hidden, num_classes)
-    # gnnNets_NC = GM_GCN(num_layers, dim_node, dim_hidden, num_classes)
-    gnnNets_NC = GAT(num_layers, dim_node, hid_dim, num_classes, dropout, heads = head)
+    gnnNets_NC = GM_GCN(num_layers, dim_node, dim_hidden, num_classes)
+    # gnnNets_NC = GAT(num_layers, dim_node, hid_dim, num_classes, dropout, heads = head)
     # gnnNets_NC = GraphSAGE(num_layers, dim_node, dim_hidden, num_classes)
     gnnNets_NC = gnnNets_NC.cuda()
     criterion = nn.NLLLoss()
@@ -99,11 +99,11 @@ def train_NC(parser,  lr ,head, dropout, wd2, hid_dim):
             best_acc = eval_info['test_acc']
         if is_best or epoch % parser.save_epoch == 0:
             save_best(ckpt_dir, epoch, gnnNets_NC, parser.model_name, eval_info['val_acc'], is_best)
-            # print(f'Epoch {epoch}, Train Loss: {eval_info["train_loss"]:.4f}, '
-            #             f'Train Accuracy: {eval_info["train_acc"]:.3f}, '
-            #             f'Val Loss: {eval_info["val_loss"]:.3f}, '
-            #             f'Val Accuracy: {eval_info["val_acc"]:.3f}',
-            #             f'Test Accuracy: {eval_info["test_acc"]:.3f}')
+            print(f'Epoch {epoch}, Train Loss: {eval_info["train_loss"]:.4f}, '
+                        f'Train Accuracy: {eval_info["train_acc"]:.3f}, '
+                        f'Val Loss: {eval_info["val_loss"]:.3f}, '
+                        f'Val Accuracy: {eval_info["val_acc"]:.3f}',
+                        f'Test Accuracy: {eval_info["test_acc"]:.3f}')
 
 
     # report test msg
@@ -173,12 +173,12 @@ if __name__ == '__main__':
     parser.add_argument('--dim_hidden', default=20)
     parser.add_argument('--alpha', default=0.5)
     parser.add_argument('--theta', default=0.5)
-    parser.add_argument('--num_layers', default=3)
+    parser.add_argument('--num_layers', default=6)
     parser.add_argument('--shared_weights', default=False)
     parser.add_argument('--dropout', default=0.3)
     parser.add_argument('--dataset_dir', default='../datasets/')
     parser.add_argument('--dataset_name', default='Ba_Community')
-    parser.add_argument('--epoch', default=1000)
+    parser.add_argument('--epoch', default=2000)
     parser.add_argument('--save_epoch', default=10)
     parser.add_argument('--lr', default=0.01)
     parser.add_argument('--wd1', default=1e-3)
@@ -189,10 +189,11 @@ if __name__ == '__main__':
         for b in range(1,9):
                 for c in range(1,4):
                     heads.append([a,b,c])
-    lrs = [0.001,0.005]
+    heads = [[4, 7, 7,7,7,2]]
+    lrs = [0.001]
     dropouts = [0]
-    wd2s = [5e-2, 5e-3]
-    hid_dims = [20]
+    wd2s = [5e-3]
+    hid_dims = [50]
     best_acc = 0
     best_parameters = []
     from itertools import product

@@ -1238,6 +1238,7 @@ class GAT(nn.Module):
         self.outlayer = nn.Linear(heads[-1]*hid_dim, n_classes)
         self.relu = nn.ReLU()
         self.dropout = nn.Dropout(dropout)
+        self.bn = nn.BatchNorm1d(hid_dim)
 
     def forward(self, *args) -> torch.Tensor:
         """
@@ -1253,6 +1254,7 @@ class GAT(nn.Module):
             # print(x.shape)
             # print(conv.lin_l)
             x = conv(x, edge_index)
+            x = self.bn(x)
             x = self.relu(x)
             x = self.dropout(x)
         x = self.outlayer(x)
