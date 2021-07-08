@@ -189,9 +189,9 @@ if __name__ == '__main__':
         for b in range(1,9):
                 for c in range(1,4):
                     heads.append([a,b,c])
-    lrs = [0.001,0.005]
+    lrs = [0.005]
     dropouts = [0]
-    wd2s = [5e-2, 5e-3]
+    wd2s = [5e-2]
     hid_dims = [20]
     best_acc = 0
     best_parameters = []
