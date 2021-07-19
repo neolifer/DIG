@@ -1,3 +1,4 @@
+import sys
 from typing import List, Tuple, Dict
 
 from math import sqrt
@@ -46,19 +47,24 @@ class ExplainerBase(nn.Module):
         self.table = Chem.GetPeriodicTable().GetElementSymbol
 
     def __set_masks__(self, x, edge_index, init="normal"):
+
         (N, F), E = x.size(), edge_index.size(1)
 
         std = 0.1
         self.node_feat_mask = torch.nn.Parameter(torch.randn(F, requires_grad=True, device=self.device) * 0.1)
 
         std = torch.nn.init.calculate_gain('relu') * sqrt(2.0 / (2 * N))
-        self.edge_mask = torch.nn.Parameter(torch.randn(E, requires_grad=True, device=self.device) * std)
+        if self.edge_mask is None:
+            self.edge_mask = torch.nn.Parameter(torch.randn(E, requires_grad=True, device=self.device) * std)
         # self.edge_mask = torch.nn.Parameter(100 * torch.ones(E, requires_grad=True))
 
         for module in self.model.modules():
             if isinstance(module, MessagePassing):
                 module.__explain__ = True
-                module.__edge_mask__ = self.edge_mask
+                try:
+                    module.__edge_mask__ = self.edge_mask
+                except:
+                    module.__edge_mask__ = torch.nn.Parameter(self.edge_mask, requires_grad= False)
 
     def __clear_masks__(self):
         for module in self.model.modules():
@@ -73,6 +79,8 @@ class ExplainerBase(nn.Module):
         if self.explain_graph:
             return -1
         else:
+            # if self.num_layers > 3:
+            #     return 3
             return self.num_layers
 
     def __flow__(self):
@@ -405,24 +413,25 @@ class ExplainerBase(nn.Module):
         for ex_label, edge_mask in enumerate(edge_masks):
 
             self.edge_mask.data = float('inf') * torch.ones(edge_mask.size(), device=self.device)
-            ori_pred = self.model(x=x, edge_index=edge_index, **kwargs)
+            ori_pred = self.model(x, edge_index, **kwargs)
 
             self.edge_mask.data = edge_mask
-            masked_pred = self.model(x=x, edge_index=edge_index, **kwargs)
+            masked_pred = self.model(x,edge_index, **kwargs)
 
             # mask out important elements for fidelity calculation
             self.edge_mask.data = - edge_mask  # keep Parameter's id
-            maskout_pred = self.model(x=x, edge_index=edge_index, **kwargs)
+            maskout_pred = self.model(x, edge_index, **kwargs)
 
             # zero_mask
             self.edge_mask.data = - float('inf') * torch.ones(edge_mask.size(), device=self.device)
-            zero_mask_pred = self.model(x=x, edge_index=edge_index, **kwargs)
+            zero_mask_pred = self.model(x, edge_index, **kwargs)
 
             related_preds.append({'zero': zero_mask_pred[node_idx],
                                   'masked': masked_pred[node_idx],
                                   'maskout': maskout_pred[node_idx],
                                   'origin': ori_pred[node_idx]})
-
+            print(related_preds)
+            sys.exit()
             # Adding proper activation function to the models' outputs.
             related_preds[ex_label] = {key: pred.softmax(0)[ex_label].item()
                                     for key, pred in related_preds[ex_label].items()}
@@ -530,24 +539,31 @@ class WalkBase(ExplainerBase):
         related_preds = []
 
         for label, mask in enumerate(masks):
+            zeros = torch.where(mask < 0)
+            nonzeros = torch.where(mask > 0)
             # origin pred
             for edge_mask in self.edge_mask:
-                edge_mask.data = float('inf') * torch.ones(mask.size(), device=self.device)
-            ori_pred = self.model(x=x, edge_index=edge_index, **kwargs)
+                edge_mask.data = torch.ones(mask.size(), device=self.device)
 
+            ori_pred = self.model(x, edge_index, **kwargs)
             for edge_mask in self.edge_mask:
+
                 edge_mask.data = mask
-            masked_pred = self.model(x=x, edge_index=edge_index, **kwargs)
+                edge_mask.data[zeros] = 0
+                edge_mask.data[nonzeros] = 1
+            masked_pred = self.model(x, edge_index, **kwargs)
 
             # mask out important elements for fidelity calculation
             for edge_mask in self.edge_mask:
                 edge_mask.data = - mask
-            maskout_pred = self.model(x=x, edge_index=edge_index, **kwargs)
+                edge_mask.data[zeros] = 1
+                edge_mask.data[nonzeros] = 0
+            maskout_pred = self.model(x, edge_index, **kwargs)
 
             # zero_mask
             for edge_mask in self.edge_mask:
-                edge_mask.data = - float('inf') * torch.ones(mask.size(), device=self.device)
-            zero_mask_pred = self.model(x=x, edge_index=edge_index, **kwargs)
+                edge_mask.data = torch.zeros(mask.size(), device=self.device)
+            zero_mask_pred = self.model(x, edge_index, **kwargs)
 
             # Store related predictions for further evaluation.
             related_preds.append({'zero': zero_mask_pred[node_idx],

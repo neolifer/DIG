@@ -1,10 +1,14 @@
+import sys
+
 import torch
 from torch import Tensor
-from torch_geometric.utils.loop import add_self_loops
+from torch_geometric.utils.loop import add_self_loops, remove_self_loops
 from dig.version import debug
 from ..models.utils import subgraph
 from torch.nn.functional import cross_entropy
 from .base_explainer import ExplainerBase
+from torch_geometric.data import Data, Batch,DataLoader
+
 EPS = 1e-15
 
 def cross_entropy_with_logit(y_pred: torch.Tensor, y_true: torch.Tensor, **kwargs):
@@ -37,7 +41,7 @@ class GNNExplainer(ExplainerBase):
         'node_feat_ent': 0.1,
     }
 
-    def __init__(self, model, epochs=100, lr=0.01, explain_graph=False):
+    def __init__(self, model, epochs=1000, lr=0.01, explain_graph=False):
         super(GNNExplainer, self).__init__(model, epochs, lr, explain_graph)
 
 
@@ -83,7 +87,7 @@ class GNNExplainer(ExplainerBase):
                 h = x * self.node_feat_mask.view(1, -1).sigmoid()
             else:
                 h = x
-            raw_preds = self.model(x=h, edge_index=edge_index, **kwargs)
+            raw_preds = self.model(h, edge_index, **kwargs)
             loss = self.__loss__(raw_preds, ex_label)
             if epoch % 20 == 0 and debug:
                 print(f'Loss:{loss.item()}')
@@ -94,7 +98,7 @@ class GNNExplainer(ExplainerBase):
 
         return self.edge_mask.data
 
-    def forward(self, x, edge_index, mask_features=False, **kwargs):
+    def forward(self, x, edge_index, y,mask_features=False, control_sparsity = False, **kwargs):
         r"""
         Run the explainer for a specific graph instance.
 
@@ -130,9 +134,11 @@ class GNNExplainer(ExplainerBase):
             node_idx = kwargs.get('node_idx')
             self.node_idx = node_idx
             assert node_idx is not None
-            _, _, _, self.hard_edge_mask = subgraph(
+            subset, new_edge_index, inv, self.hard_edge_mask = subgraph(
                 node_idx, self.__num_hops__, self_loop_edge_index, relabel_nodes=True,
                 num_nodes=None, flow=self.__flow__())
+        new_x = x[subset]
+        new_y = y[subset]
 
         # Assume the mask we will predict
         labels = tuple(i for i in range(kwargs.get('num_classes')))
@@ -143,17 +149,18 @@ class GNNExplainer(ExplainerBase):
         for ex_label in ex_labels:
             self.__clear_masks__()
             self.__set_masks__(x, self_loop_edge_index)
-            edge_masks.append(self.control_sparsity(self.gnn_explainer_alg(x, edge_index, ex_label), sparsity=kwargs.get('sparsity')))
-            # edge_masks.append(self.gnn_explainer_alg(x, edge_index, ex_label))
+            if control_sparsity:
+                edge_masks.append(self.control_sparsity(self.gnn_explainer_alg(x, edge_index, ex_label), sparsity=kwargs.get('sparsity')))
+            else:
+                edge_masks.append(self.gnn_explainer_alg(x, edge_index, ex_label))
 
 
         with torch.no_grad():
             related_preds = self.eval_related_pred(x, edge_index, edge_masks, **kwargs)
 
-
         self.__clear_masks__()
 
-        return None, edge_masks, related_preds
+        return self.hard_edge_mask, new_x, new_y, edge_masks, related_preds
 
 
 

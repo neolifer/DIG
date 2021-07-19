@@ -1,3 +1,4 @@
+import sys
 from typing import Any, Callable, List, Tuple, Union, Dict
 import torch
 from torch import Tensor
@@ -113,13 +114,12 @@ class GradCAM(WalkBase):
 
         masks = []
         for ex_label in ex_labels:
-            attr_wo_relu = self.explain_method.attribute(data, ex_label, additional_forward_args=edge_index)
+            attr_wo_relu = self.explain_method.attribute(x, ex_label, additional_forward_args=edge_index)
             mask = normalize(attr_wo_relu.relu())
             mask = mask.squeeze()
             mask = (mask[self_loop_edge_index[0]] + mask[self_loop_edge_index[1]]) / 2
             mask = self.control_sparsity(mask, kwargs.get('sparsity'))
             masks.append(mask.detach())
-
         # Store related predictions for further evaluation.
 
         with torch.no_grad():
@@ -254,6 +254,7 @@ class GraphLayerGradCam(ca.LayerGradCam):
             additional_forward_args
         )
         gradient_mask = apply_gradient_requirements(inputs)
+        # inputs[0].requires_grad = True
         # Returns gradient of output with respect to
         # hidden layer and hidden layer evaluated at each input.
         layer_gradients, layer_evals, is_layer_tuple = compute_layer_gradients_and_eval(
@@ -266,7 +267,7 @@ class GraphLayerGradCam(ca.LayerGradCam):
             attribute_to_layer_input=attribute_to_layer_input,
         )
         undo_gradient_requirements(inputs, gradient_mask)
-
+        # inputs[0].requires_grad = False
         # Gradient Calculation end
 
         # what I add: shape from PyG to General PyTorch

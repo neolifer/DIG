@@ -170,6 +170,8 @@ class LagrangianOptimization:
         #     self.optimizer_alpha.zero_grad()
 
         loss = f + torch.nn.functional.softplus(self.alpha) * g
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 2)
+        # print(g.item(), (torch.nn.functional.softplus(self.alpha) * g).item())
         loss.backward()
         # torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
         if self.batch_size_multiplier is not None and self.batch_size_multiplier > 1:

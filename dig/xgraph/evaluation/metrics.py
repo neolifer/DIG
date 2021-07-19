@@ -5,6 +5,7 @@ Time: 2021/2/22 14:00
 Project: DIG
 Author: Shurui Gui
 """
+import sys
 
 import torch
 import torch.nn as nn
@@ -58,7 +59,7 @@ def fidelity(ori_probs: torch.Tensor, unimportant_probs: torch.Tensor) -> float:
 
     drop_probability = ori_probs - unimportant_probs
 
-    return drop_probability.mean().item()
+    return drop_probability.mean()
 
 
 def fidelity_inv(ori_probs: torch.Tensor, important_probs: torch.Tensor) -> float:
@@ -145,6 +146,7 @@ class XCollector(object):
         elif None in self.__related_preds['maskout'] or None in self.__related_preds['origin']:
             return None
         else:
+
             mask_out_preds, one_mask_preds = \
                 torch.tensor(self.__related_preds['maskout']), torch.tensor(self.__related_preds['origin'])
 

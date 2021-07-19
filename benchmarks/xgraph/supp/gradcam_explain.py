@@ -20,11 +20,11 @@ parser.add_argument('--model_level', default='node')
 parser.add_argument('--dim_hidden', default=20)
 parser.add_argument('--alpha', default=0.5)
 parser.add_argument('--theta', default=0.5)
-parser.add_argument('--num_layers', default=5)
+parser.add_argument('--num_layers', default=3)
 parser.add_argument('--shared_weights', default=False)
 parser.add_argument('--dropout', default=0.1)
 parser.add_argument('--dataset_dir', default='./datasets/')
-parser.add_argument('--dataset_name', default='BA_shapes')
+parser.add_argument('--dataset_name', default='BA_community')
 parser.add_argument('--epoch', default=1000)
 parser.add_argument('--save_epoch', default=10)
 parser.add_argument('--lr', default=0.01)
@@ -63,7 +63,7 @@ def split_dataset(dataset):
 dataset = get_dataset(parser)
 # dim_node = dataset.num_node_features
 dataset.data.x = dataset.data.x.to(torch.float32)
-dataset.data.x = dataset.data.x[:, :1]
+# dataset.data.x = dataset.data.x[:, :1]
 # dataset.data.y = dataset.data.y[:, 2]
 dim_node = dataset.num_node_features
 dim_edge = dataset.num_edge_features
@@ -97,15 +97,19 @@ dropout=parser.dropout
 
 # model = GCN2_mask(model_level, dim_node, dim_hidden, num_classes, alpha, theta, num_layers,
 #                    shared_weights, dropout)
-model = GCN_2l(model_level='node', dim_node=dim_node, dim_hidden=20, num_classes=num_classes)
-
-model.to(device)
-check_checkpoints()
-# ckpt_path = osp.join('checkpoints', 'ba_shapes', 'GCN2','GCN2_best.pth')
-ckpt_path = osp.join('checkpoints', 'ba_shapes', 'GCN_2l','GCN_2l_best.pth')
-model.load_state_dict(torch.load(ckpt_path)['net'])
+# model = GCN_2l(model_level='node', dim_node=dim_node, dim_hidden=20, num_classes=num_classes)
+#
+# model.to(device)
+# check_checkpoints()
+# # ckpt_path = osp.join('checkpoints', 'ba_shapes', 'GCN2','GCN2_best.pth')
+# ckpt_path = osp.join('checkpoints', 'ba_shapes', 'GCN_2l','GCN_2l_best.pth')
+# model.load_state_dict(torch.load(ckpt_path)['net'])
 # ckpt_path = osp.join('checkpoints', 'ba_shapes', 'GCN_2l', '0', 'GCN_2l_best.ckpt')
 # model.load_state_dict(torch.load(ckpt_path)['state_dict'])
+model = GCN_mask(num_layers, dim_node, dim_hidden, num_classes)
+ckpt_path = osp.join('checkpoints', 'ba_community', 'GM_GCN','GM_GCN_100_best.pth')
+model.load_state_dict(torch.load(ckpt_path)['net'])
+model.to(device)
 
 
 node_indices = torch.where(dataset[0].test_mask * dataset[0].y != 0)[0].tolist()
@@ -115,7 +119,7 @@ from dig.xgraph.method import GradCAM
 explainer = GradCAM(model, explain_graph=False)
 
 # --- Set the Sparsity to 0.5 ---
-sparsity = 0.5
+sparsity = 0.95
 data = dataset[0].cuda()
 # --- Create data collector and explanation processor ---
 from dig.xgraph.evaluation import XCollector, ExplanationProcessor
@@ -125,6 +129,7 @@ x_collector = XCollector(sparsity)
 for index, data in enumerate(dataloader):
     for j, node_idx in enumerate(torch.where(data.test_mask)[0].tolist()):
         # print(f'explain graph line {dataloader.dataset.indices[index] + 2}')
+        print(f'explain node {node_idx}')
         data.to(device)
 
         if torch.isnan(data.y[0].squeeze()):

@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch_geometric as tg
 import torch_geometric.nn as gnn
-from torch_geometric.utils.loop import add_self_loops, remove_self_loops
+from torch_geometric.utils import remove_self_loops, add_self_loops, softmax
 from torch_geometric.utils import add_remaining_self_loops
 from torch_geometric.utils.num_nodes import maybe_num_nodes
 from torch_geometric.data.batch import Batch
@@ -96,7 +96,7 @@ class GM_GCN(nn.Module):
             conv.chache = None
 
 
-    def forward(self, x, edge_index, message_scales = None, message_replacement = None):
+    def forward(self, x, edge_index, message_scales = None, message_replacement = None,**kwargs):
         # x, edge_index = data.x, data.edge_index
         if message_scales and message_replacement:
             for i, conv in enumerate(self.convs):
@@ -292,7 +292,7 @@ class GM_GCN2(nn.Module):
 class GM_GATConv(gnn.GATConv):
     def __init__(self,*args, **kwargs):
         super(GM_GATConv, self).__init__(*args, **kwargs)
-
+        self.get_vertex = True
     def forward(self, x: Union[Tensor, OptPairTensor], edge_index: Adj,
                 size: Size = None, return_attention_weights=None, message_scale = None, message_replacement = None):
         # type: (Union[Tensor, OptPairTensor], Tensor, Size, NoneType) -> Tensor  # noqa
@@ -340,7 +340,7 @@ class GM_GATConv(gnn.GATConv):
                 edge_index, _ = add_self_loops(edge_index, num_nodes=num_nodes)
             elif isinstance(edge_index, SparseTensor):
                 edge_index = set_diag(edge_index)
-
+        self.last_edge_index = edge_index
         # propagate_type: (x: OptPairTensor, alpha: OptPairTensor)
         out = self.propagate(edge_index, x=(x_l, x_r),
                              alpha=(alpha_l, alpha_r), size=size, message_scale = message_scale, message_replacement = message_replacement)
@@ -371,7 +371,7 @@ class GM_GATConv(gnn.GATConv):
                 message_replacement: Tensor) -> Tensor:
         alpha = alpha_j if alpha_i is None else alpha_j + alpha_i
         alpha = F.leaky_relu(alpha, self.negative_slope)
-        alpha = F.softmax(alpha, index, ptr, size_i)
+        alpha = softmax(alpha, index, ptr, size_i)
         self._alpha = alpha
         alpha = F.dropout(alpha, p=self.dropout, training=self.training)
         original_message =  x_j * alpha.unsqueeze(-1)
@@ -380,45 +380,40 @@ class GM_GATConv(gnn.GATConv):
             original_message = torch.mul(original_message, message_scale.unsqueeze(-1))
             if message_replacement is not None:
                 message = original_message + torch.mul( message_replacement, (1 - message_scale).unsqueeze(-1))
-        self.latest_vertex_embeddings = torch.cat([x_j, x_i, message], dim = -1) if message_scale is not None else torch.cat([x_j, x_i, original_message], dim = -1)
+        if self.get_vertex:
+            self.latest_vertex_embeddings = torch.cat([x_j, x_i, message], dim = -1) if message_scale is not None else torch.cat([x_j, x_i, original_message], dim = -1)
         # print(self.latest_vertex_embeddings.shape[0])
         if message_scale is not None:
             return message
         return original_message
+
     def get_latest_vertex_embedding(self):
-        self.latest_vertex_embeddings = []
-        for conv in self.convs:
-            self.latest_vertex_embeddings.append(conv.get_latest_vertex_embedding())
         return self.latest_vertex_embeddings
 
     def get_message_dim(self):
-        self.message_dims = []
-        for conv in self.convs:
-            self.message_dims.append(conv.get_message_dim())
-        return self.message_dims
-
-    def get_last_edge_index(self):
-        self.last_edge_indexs = []
-        for conv in self.convs:
-            self.last_edge_indexs.append(conv.last_edge_index)
-        return self.last_edge_indexs
+        return self.message_dim
 
 class GM_GAT(nn.Module):
     def __init__(self,n_layers, input_dim, hid_dim, n_classes, dropout = 0, heads = None ):
         super(GM_GAT, self).__init__()
+
         if not heads:
-            heads = [1 for _ in range(n_layers)]
-        self.convs = nn.ModuleList([GM_GATConv(input_dim, hid_dim, heads = heads[0])]
+            heads = [3 for _ in range(n_layers)]
+        self.convs = nn.ModuleList([GM_GATConv(input_dim, hid_dim, heads = heads[0], dropout = dropout)]
                                    + [
-                                       GM_GATConv(hid_dim, hid_dim, heads = i + 1)
+                                       GM_GATConv(heads[i]*hid_dim, hid_dim, heads = heads[i + 1], dropout = dropout)
                                        for i in range(n_layers - 1)
                                    ]
                                    )
         self.hidden_dims = [hid_dim for _ in range(n_layers)]
-        self.outlayer = nn.Linear(hid_dim, n_classes)
+        self.outlayer = nn.Linear(heads[-1]*hid_dim, n_classes)
         self.relu = nn.ReLU()
         self.dropout = nn.Dropout(dropout)
+        self.bn = nn.BatchNorm1d(hid_dim)
 
+    def set_get_vertex(self, get_vertex = True):
+        for conv in self.convs:
+            conv.get_vertex = get_vertex
     def forward(self, x, edge_index, message_scales = None, message_replacement = None):
         # x, edge_index = data.x, data.edge_index
         if message_scales and message_replacement:
@@ -439,6 +434,7 @@ class GM_GAT(nn.Module):
         self.latest_vertex_embeddings = []
         for conv in self.convs:
             self.latest_vertex_embeddings.append(conv.get_latest_vertex_embedding())
+            conv.latest_vertex_embeddings = None
         return self.latest_vertex_embeddings
 
     def get_message_dim(self):
@@ -493,22 +489,10 @@ class GM_SAGEConv(gnn.SAGEConv):
         return original_message
 
     def get_latest_vertex_embedding(self):
-        self.latest_vertex_embeddings = []
-        for conv in self.convs:
-            self.latest_vertex_embeddings.append(conv.get_latest_vertex_embedding())
         return self.latest_vertex_embeddings
 
     def get_message_dim(self):
-        self.message_dims = []
-        for conv in self.convs:
-            self.message_dims.append(conv.get_message_dim())
-        return self.message_dims
-
-    def get_last_edge_index(self):
-        self.last_edge_indexs = []
-        for conv in self.convs:
-            self.last_edge_indexs.append(conv.last_edge_index)
-        return self.last_edge_indexs
+        return self.message_dim
 
 class GM_SAGE(nn.Module):
     def __init__(self, n_layers, input_dim, hid_dim, n_classes, dropout = 0):

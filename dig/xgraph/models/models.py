@@ -474,7 +474,7 @@ class GCN_2l_mask(GNNBasic):
 
     def __init__(self, model_level, dim_node, dim_hidden, num_classes):
         super().__init__()
-        num_layer = 4
+        num_layer = 2
 
         self.conv1 = GCNConv_mask(dim_node, dim_hidden)
         self.convs = nn.ModuleList(
@@ -501,12 +501,11 @@ class GCN_2l_mask(GNNBasic):
 
         self.dropout = nn.Dropout()
 
-    def forward(self, data) -> torch.Tensor:
-        """
-        :param Required[data]: Batch - input data
-        :return:
-        """
-        x, edge_index= data.x, data.edge_index
+    def forward(self, *args, **kwargs):
+        if len(args) == 1:
+            x, edge_index = args[0].x, args[0].edge_index
+        else:
+            x, edge_index = args[0], args[1]
 
         x = self.relu1(self.conv1(x, edge_index))
         for conv, relu in zip(self.convs, self.relus):
@@ -518,11 +517,14 @@ class GCN_2l_mask(GNNBasic):
 
         return out
 
-    def get_emb(self, data) -> torch.Tensor:
-        x, edge_index= data.x, data.edge_index
+    def get_emb(self,*args):
+        if len(args) == 1:
+            x, edge_index = args[0].x, args[0].edge_index
+        else:
+            x, edge_index = args[0], args[1]
         x = self.conv1(x, edge_index)
-        for conv in self.convs:
-            x = conv(x, edge_index)
+        for conv, relu in zip(self.convs, self.relus):
+            x = relu(conv(x, edge_index))
         return x
 
 
@@ -592,7 +594,6 @@ class GCNConv_mask(gnn.GCNConv):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.edge_weight = None
 
     def forward(self, x: Tensor, edge_index: Adj,
                 edge_weight: OptTensor = None) -> Tensor:
@@ -622,7 +623,7 @@ class GCNConv_mask(gnn.GCNConv):
                     edge_index = cache
 
         # --- add require_grad ---
-        edge_weight.requires_grad_(True)
+
 
         x = torch.matmul(x, self.weight)
 
@@ -634,7 +635,7 @@ class GCNConv_mask(gnn.GCNConv):
             out += self.bias
 
         # --- My: record edge_weight ---
-        self.edge_weight = edge_weight
+
 
         return out
 
@@ -1208,6 +1209,7 @@ class GATConv_mask(gnn.GATConv):
             # message passing computation scheme.
             if self.__explain__:
                 edge_mask = self.__edge_mask__
+
                 # Some ops add self-loops to `edge_index`. We need to do the
                 # same for `edge_mask` (but do not train those).
                 if out.size(self.node_dim) != edge_mask.size(0):
@@ -1240,7 +1242,7 @@ class GAT(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.bn = nn.BatchNorm1d(hid_dim)
 
-    def forward(self, *args) -> torch.Tensor:
+    def forward(self, *args, **kwargs) -> torch.Tensor:
         """
         :param Required[data]: Batch - input data
         :return:
@@ -1254,13 +1256,13 @@ class GAT(nn.Module):
             # print(x.shape)
             # print(conv.lin_l)
             x = conv(x, edge_index)
-            x = self.bn(x)
+            # x = self.bn(x)
             x = self.relu(x)
             x = self.dropout(x)
         x = self.outlayer(x)
         return x
 
-    def get_emb(self, *args) -> torch.Tensor:
+    def get_emb(self, *args, **kwargs) -> torch.Tensor:
 
         if len(args) == 1:
             x, edge_index = args[0].x, args[0].edge_index
@@ -1312,3 +1314,44 @@ class GAT_mask(nn.Module):
             x = self.relu(x)
             x = self.dropout(x)
         return x
+    
+class GCN_mask(nn.Module):
+    def __init__(self, n_layers, input_dim, hid_dim, n_classes, dropout = 0):
+        super(GCN_mask, self).__init__()
+        self.convs = nn.ModuleList([GCNConv_mask(input_dim, hid_dim)]
+                                   + [
+                                       GCNConv_mask(hid_dim, hid_dim)
+                                       for _ in range(n_layers - 1)
+                                   ]
+                                   )
+        self.hidden_dims = [hid_dim for _ in range(n_layers)]
+        self.outlayer = nn.Linear(hid_dim, n_classes)
+        self.relu = nn.ReLU()
+        self.dropout = nn.Dropout(dropout)
+        # self.bn = nn.BatchNorm1d(hid_dim)
+        for conv in self.convs:
+            conv.chache = None
+
+    def forward(self, *args, **kwargs):
+        if len(args) == 1:
+            x, edge_index = args[0].x, args[0].edge_index
+        else:
+             x, edge_index = args[0], args[1]
+
+        for conv in self.convs:
+            x = conv(x, edge_index)
+            x = self.relu(x)
+            x = self.dropout(x)
+        x = self.outlayer(x)
+        return x
+
+    def get_emb(self,*args):
+        if len(args) == 1:
+            x, edge_index = args[0].x, args[0].edge_index
+        else:
+            x, edge_index = args[0], args[1]
+        for conv in self.convs:
+            x = conv(x, edge_index)
+            x = self.relu(x)
+        return x
+

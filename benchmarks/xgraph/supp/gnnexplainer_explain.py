@@ -1,10 +1,12 @@
 import sys
 sys.path.append('../../..')
-
+from tqdm import tqdm
 sys.path.append('../../../..')
 from dig.xgraph.dataset import SynGraphDataset
 from dig.xgraph.models import *
+from dig.xgraph.method.shapley import GnnNets_GC2value_func, GnnNets_NC2value_func, gnn_score
 from torch_geometric.nn import GNNExplainer
+import torch.nn.functional as F
 import torch
 from torch_geometric.data import DataLoader
 from torch_geometric.data import Data, InMemoryDataset, download_url, extract_zip
@@ -18,18 +20,19 @@ from torch_geometric.utils import k_hop_subgraph, to_networkx
 from copy import copy
 from math import sqrt
 from typing import Optional
+from dig.xgraph.method.pgexplainer import k_hop_subgraph_with_default_whole_graph, calculate_selected_nodes
 parser = argparse.ArgumentParser()
 parser.add_argument('--model', default='GCN2', dest='gnn models')
 parser.add_argument('--model_name', default='GCN2')
 parser.add_argument('--model_level', default='node')
-parser.add_argument('--dim_hidden', default=64)
+parser.add_argument('--dim_hidden', default=300)
 parser.add_argument('--alpha', default=0.5)
 parser.add_argument('--theta', default=0.5)
-parser.add_argument('--num_layers', default=64)
+parser.add_argument('--num_layers', default=8)
 parser.add_argument('--shared_weights', default=False)
 parser.add_argument('--dropout', default=0.1)
 parser.add_argument('--dataset_dir', default='./datasets/')
-parser.add_argument('--dataset_name', default='BA_shapes')
+parser.add_argument('--dataset_name', default='BA_community')
 parser.add_argument('--epoch', default=1000)
 parser.add_argument('--save_epoch', default=10)
 parser.add_argument('--lr', default=0.01)
@@ -71,7 +74,7 @@ def split_dataset(dataset):
 
 dataset = get_dataset(parser)
 dataset.data.x = dataset.data.x.to(torch.float32)
-dataset.data.x = dataset.data.x[:, :1]
+# dataset.data.x = dataset.data.x[:, :1]
 # dataset.data.y = dataset.data.y[:, 2]
 dim_node = dataset.num_node_features
 dim_edge = dataset.num_edge_features
@@ -105,13 +108,14 @@ dropout=parser.dropout
 # model = GCN2(model_level, dim_node, dim_hidden, num_classes, alpha, theta, num_layers,
 # shared_weights, dropout)
 # model = GCN_2l(model_level='node', dim_node=dim_node, dim_hidden=300, num_classes=num_classes)
-model = GAT(model_level='node', dim_node=dim_node, dim_hidden=300, num_classes=num_classes)
+model = GM_GCN(num_layers, dim_node, dim_hidden, num_classes)
 model.to(device)
 check_checkpoints()
 # ckpt_path = osp.join('checkpoints', 'ba_shapes', 'GIN_2l', '0', 'GIN_2l_best.ckpt')
 # model.load_state_dict(torch.load(ckpt_path)['state_dict'])
 # ckpt_path = osp.join('checkpoints', 'ba_shapes', 'GCN2','GCN2_best.pth')
 # ckpt_path = osp.join('checkpoints', 'ba_shapes', 'GCN_2l','GCN_2l_best.pth')
+ckpt_path = osp.join('checkpoints', 'ba_community', 'GM_GCN','GM_GCN_best.pth')
 model.load_state_dict(torch.load(ckpt_path)['net'])
 # from dig.xgraph.method import GNNExplainer
 
@@ -127,7 +131,31 @@ class Explainer(GNNExplainer):
         self.__num_hops__ = num_hops
         self.return_type = return_type
         self.log = log
-    def visualize_subgraph(self, node_idx, edge_index, edge_mask, y=None,
+    def get_subgraph(self, node_idx, x, edge_index,y,**kwargs):
+
+        num_nodes, num_edges = x.size(0), edge_index.size(1)
+        graph = to_networkx(data=Data(x=x, edge_index=edge_index), to_undirected=True)
+
+        subset, edge_index, mapping, edge_mask = k_hop_subgraph_with_default_whole_graph(
+            edge_index, node_idx, self.num_hops, relabel_nodes=True,
+            num_nodes=num_nodes, flow=self.__flow__())
+
+        # mapping = {int(v): k for k, v in enumerate(subset)}
+        # subgraph = graph.subgraph(subset.tolist())
+        # nx.relabel_nodes(subgraph, mapping)
+
+        x = x[subset]
+        for key, item in kwargs.items():
+            if torch.is_tensor(item) and item.size(0) == num_nodes:
+                item = item[subset]
+            elif torch.is_tensor(item) and item.size(0) == num_edges:
+                item = item[edge_mask]
+            kwargs[key] = item
+        if y is not None:
+            y = y[subset]
+        return subset, x, edge_index,  mapping, edge_mask,y
+
+    def visualize_subgraph(self, x,node_idx, edge_index, edge_mask, y=None,
                            threshold=None, **kwargs):
         r"""Visualizes the subgraph given an edge mask
         :attr:`edge_mask`.
@@ -173,7 +201,7 @@ class Explainer(GNNExplainer):
                             device=edge_index.device)
         else:
             y = y[subset].to(torch.float) / y.max().item()
-
+        subset, x, edge_index, mapping, hard_edge_mask,y = self.get_subgraph(node_idx, x, edge_index,y)
         data = Data(edge_index=edge_index, att=edge_mask, y=y,
                     num_nodes=y.size(0)).to('cpu')
         G = to_networkx(data, node_attrs=['y'], edge_attrs=['att'])
@@ -205,52 +233,135 @@ class Explainer(GNNExplainer):
 
         return ax, G
 
+    def explain_node(self, node_idx, x, edge_index, y,topk = 0, **kwargs):
+        r"""Learns and returns a node feature mask and an edge mask that play a
+        crucial role to explain the prediction made by the GNN for node
+        :attr:`node_idx`.
+
+        Args:
+            node_idx (int): The node to explain.
+            x (Tensor): The node feature matrix.
+            edge_index (LongTensor): The edge indices.
+            **kwargs (optional): Additional arguments passed to the GNN module.
+
+        :rtype: (:class:`Tensor`, :class:`Tensor`)
+        """
+
+        self.model.eval()
+        self.__clear_masks__()
+
+        num_edges = edge_index.size(1)
+
+
+        # Get the initial prediction.
+        with torch.no_grad():
+            out = self.model(x=x, edge_index=edge_index, **kwargs)
+            log_logits = self.__to_log_prob__(out)
+            probs = F.softmax(out, dim = -1)
+            pred_label = log_logits.argmax(dim=-1)
+            label = pred_label[node_idx]
+
+        # Only operate on a k-hop subgraph around `node_idx`.
+        if topk > 0:
+            subset, x, edge_index, mapping, hard_edge_mask,y = self.get_subgraph(
+                node_idx, x, edge_index,y, **kwargs)
+            new_node_idx = torch.where(subset == node_idx)[0]
+        else:
+            x, edge_index, mapping, hard_edge_mask, kwargs = self.__subgraph__(
+                node_idx, x, edge_index, **kwargs)
+        self.__set_masks__(x, edge_index)
+        self.to(x.device)
+        optimizer = torch.optim.Adam([self.node_feat_mask, self.edge_mask],
+                                     lr=self.lr)
+
+        if self.log:  # pragma: no cover
+            pbar = tqdm(total=self.epochs)
+            pbar.set_description(f'Explain node {node_idx}')
+
+        for epoch in range(1, self.epochs + 1):
+            optimizer.zero_grad()
+            h = x
+            out = self.model(x=h, edge_index=edge_index, **kwargs)
+            log_logits = self.__to_log_prob__(out)
+            loss = self.__loss__(mapping, log_logits, pred_label)
+            loss.backward()
+            optimizer.step()
+
+            if self.log:  # pragma: no cover
+                pbar.update(1)
+
+        if self.log:  # pragma: no cover
+            pbar.close()
+
+        node_feat_mask = self.node_feat_mask.detach().sigmoid()
+        edge_mask = self.edge_mask.new_zeros(num_edges)
+        edge_mask[hard_edge_mask] = self.edge_mask.detach().sigmoid()
+        if topk > 0:
+            data = Data(x=x, edge_index=edge_index,  y = y)
+            selected_nodes = calculate_selected_nodes(data, edge_mask, topk)
+            maskout_nodes_list = [node for node in range(data.x.shape[0]) if node not in selected_nodes]
+            value_func = GnnNets_NC2value_func(self.model,
+                                               node_idx=new_node_idx,
+                                               target_class=label)
+            maskout_pred = gnn_score(maskout_nodes_list, data, value_func,
+                                     subgraph_building_method='zero_filling')
+            sparsity_score = 1 - len(selected_nodes) / data.x.shape[0]
+            related_preds = [{
+                'maskout': maskout_pred,
+                'origin': probs[label],
+                'sparsity': sparsity_score}]
+            return node_feat_mask, edge_mask, related_preds
+        self.__clear_masks__()
+
+        return node_feat_mask, edge_mask
 explainer = Explainer(model, epochs=100, lr=0.01)
+explainer.coeffs['edge_size'] = 1e-6
 node_indices = torch.where(dataset[0].test_mask * dataset[0].y != 0)[0].tolist()
 node_idx = node_indices[6]
 
 data = dataset[0].cuda()
-node_feat_mask, edge_mask = explainer.explain_node(node_idx, data.x, data.edge_index)
+_, edge_mask = explainer.explain_node(node_idx, data.x, data.edge_index, data.y)
 print(edge_mask)
-thres_index = max(edge_mask.shape[0] - 6, 0)
+thres_index = max(edge_mask.shape[0] - 12, 0)
 threshold = float(edge_mask.reshape(-1).sort().values[thres_index])
 hard_edge_mask = (edge_mask >= threshold)
 print(torch.count_nonzero(hard_edge_mask))
-ax, G = explainer.visualize_subgraph(node_idx, data.edge_index, hard_edge_mask,y=data.y)
+ax, G = explainer.visualize_subgraph(data.x, node_idx, data.edge_index, hard_edge_mask,y=data.y)
 
 # plt.show()
 plt.savefig('gnn_explainer.png')
+print(1)
 # --- Set the Sparsity to 0.5 ---
-# sparsity = 0.5
-#
-# # --- Create data collector and explanation processor ---
-# from dig.xgraph.evaluation import XCollector, ExplanationProcessor
-# x_collector = XCollector(sparsity)
-# x_processor = ExplanationProcessor(model=model, device=device)
+sparsity = 0.5
 
-# index = -1
-# for i, data in enumerate(dataloader):
-#     for j, node_idx in enumerate(torch.where(data.mask == True)[0].tolist()):
-#         index += 1
-#         print(f'explain graph {i} node {node_idx}')
-#         data.to(device)
-#
-#         if torch.isnan(data.y[0].squeeze()):
-#             continue
-#
-#         walks, masks, related_preds = \
-#             explainer(data.x, data.edge_index, sparsity=sparsity, num_classes=num_classes, node_idx=node_idx)
-#
-#         x_collector.collect_data(masks, related_preds, data.y[0].squeeze().long().item())
-#
-#         # if you only have the edge masks without related_pred, please feed sparsity controlled mask to
-#         # obtain the result: x_processor(data, masks, x_collector)
-#         if index >= 99:
-#             break
-#
-#     if index >= 99:
-#         break
-#
-# print(f'Fidelity: {x_collector.fidelity:.4f}\n'
-#       f'Fidelity_inv: {x_collector.fidelity_inv:.4f}\n'
-#       f'Sparsity: {x_collector.sparsity:.4f}')
+# --- Create data collector and explanation processor ---
+from dig.xgraph.evaluation import XCollector, ExplanationProcessor
+x_collector = XCollector(sparsity)
+x_processor = ExplanationProcessor(model=model, device=device)
+
+index = -1
+for i, data in enumerate(dataloader):
+    for j, node_idx in enumerate(torch.where(data.train_mask == True)[0].tolist()):
+        index += 1
+        print(f'explain graph {i} node {node_idx}')
+        data.to(device)
+
+        if torch.isnan(data.y[0].squeeze()):
+            continue
+
+        _, masks, related_preds = \
+            explainer.explain_node(node_idx, data.x, data.edge_index,data.y, topk = 6)
+
+        x_collector.collect_data(masks, related_preds, data.y[node_idx])
+
+        # if you only have the edge masks without related_pred, please feed sparsity controlled mask to
+        # obtain the result: x_processor(data, masks, x_collector)
+        if index >= 99:
+            break
+
+    if index >= 99:
+        break
+
+print(f'Fidelity: {x_collector.fidelity:.4f}\n'
+      f'Fidelity_inv: {x_collector.fidelity_inv:.4f}\n'
+      f'Sparsity: {x_collector.sparsity:.4f}')
