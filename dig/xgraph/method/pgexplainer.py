@@ -646,7 +646,7 @@ class PGExplainer(nn.Module):
                 data = dataset[0]
                 data.to(self.device)
                 self.model.eval()
-                explain_node_index_list = [i for i in range(400,700,5)]
+                explain_node_index_list = torch.where(data.test_mask == True)[0].tolist()
                 # pred_dict = {}
                 # logits = self.model(data.x, data.edge_index)
                 # for node_idx in tqdm.tqdm(explain_node_index_list):
