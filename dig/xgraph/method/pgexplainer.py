@@ -675,7 +675,7 @@ class PGExplainer(nn.Module):
                     loss += loss_tmp
                     size_loss += size_loss_temp.detach().item()
                     pred_loss += pred_loss_tmp.detach().item()
-                loss.backward()
+                    loss.backward()
                 torch.nn.utils.clip_grad_value_(self.elayers.parameters(), 2)
                 optimizer.step()
                 duration += time.perf_counter() - tic
