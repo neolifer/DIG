@@ -12,7 +12,6 @@ import torch.nn as nn
 from typing import List, Union
 from torch import Tensor
 import numpy as np
-import cilog
 from torch_geometric.nn import MessagePassing
 
 
