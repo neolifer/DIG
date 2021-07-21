@@ -125,11 +125,15 @@ model.to(device)
 # Fidelity: 0.2849
 # Sparsity: 0.9605
 # lr: 0.001
-
-coff_sizes = [0.036, 0.037]
+torch.manual_seed(42)
+import random
+random.seed(0)
+import numpy as np
+np.random.seed(0)
+coff_sizes = [0.01,0.02,0.03,0.04]
 coff_ents = [0.5,1,2,2.5,3]
 coff_preds = [0.5,1,1.5,2,2.5,3]
-lrs = [0.001, 0.01, 0.003, 0.002, 0.004, 0.005]
+lrs = [0.001, 0.01, 0.005]
 from itertools import product
 from tqdm import tqdm
 from dig.xgraph.method import PGExplainer
@@ -198,7 +202,8 @@ for coff_size, coff_ent, coff_pred, lr in tqdm(iterable= product(coff_sizes, cof
     print('hyper parameters:\n'
           f'coff_size: {coff_size}\n'
           f'coff_ent: {coff_ent}\n'
-          f'coff_pred: {coff_pred}')
+          f'coff_pred: {coff_pred}\n'
+         f'lr: {lr}')
     fidelity = x_collector.fidelity
     if fidelity > best_fidelity:
         best_fidelity = fidelity
