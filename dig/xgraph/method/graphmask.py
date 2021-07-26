@@ -13,7 +13,7 @@ from torch.optim import Adam
 from torch_geometric.data import Data, Batch,DataLoader
 import tqdm
 from torch_geometric.utils import to_networkx
-from .pgexplainer import k_hop_subgraph_with_default_whole_graph, calculate_selected_nodes
+from .pgexplainer import k_hop_subgraph_with_default_whole_graph,calculate_selected_nodes
 import networkx as nx
 import time
 from ..models.utils import LagrangianOptimization
@@ -47,7 +47,6 @@ class HardConcrete(torch.nn.Module):
 
     def __init__(self, beta=1 / 3, gamma=-0.2, zeta=1.0, fix_temp=True, loc_bias=3):
         super(HardConcrete, self).__init__()
-
         self.temp = beta if fix_temp else Parameter(torch.zeros(1).fill_(beta))
         self.gamma = gamma
         self.zeta = zeta
@@ -87,6 +86,20 @@ class HardConcrete(torch.nn.Module):
         return x.clamp(min_val, max_val)
 
 
+# def calculate_selected_nodes(data, edge_mask, top_k):
+#     threshold = float(edge_mask.reshape(-1).sort(descending=True).values[min(top_k, edge_mask.shape[0]-1)])
+#     hard_mask = (edge_mask > threshold).cpu()
+#     edge_idx_list = torch.where(hard_mask == 1)[0]
+#     selected_nodes = []
+#     edge_index = data.edge_index.cpu().numpy()
+#
+#     for edge_idx in edge_idx_list:
+#         selected_nodes += [edge_index[0][edge_idx], edge_index[1][edge_idx]]
+#     selected_nodes = list(set(selected_nodes))
+#     return selected_nodes
+
+
+
 class GraphMaskAdjMatProbe(torch.nn.Module):
 
     device = None
@@ -94,7 +107,7 @@ class GraphMaskAdjMatProbe(torch.nn.Module):
     def __init__(self, vertex_embedding_dims, message_dims, n_class, h_dims):
         super(GraphMaskAdjMatProbe, self).__init__()
         self.n_class = n_class
-        self.hard_gates = HardConcrete()
+        self.hard_gates = HardConcrete(fix_temp=False)
 
         transforms = []
         baselines = []
@@ -163,7 +176,7 @@ class GraphMaskExplainer(torch.nn.Module):
         self.graphmask = graphmask
         self.epoch = epoch
         self.device = 'cuda:0'
-        self.loss = torch.nn.KLDivLoss()
+        self.loss = torch.nn.NLLLoss()
         self.penalty_scaling = penalty_scaling
         self.allowance = allowance
         self.lr = lr
@@ -248,15 +261,15 @@ class GraphMaskExplainer(torch.nn.Module):
                     node_idx = node_idx.to('cuda:0')
                     with torch.no_grad():
                         logits = self.model(x, edge_index)
-                        real_pred = F.softmax(logits, dim = -1).detach()
+                        real_pred = logits.argmax(-1).detach()
                     gates, baselines, total_penalty = self.graphmask(self.model)
                     self.model.set_get_vertex(False)
                     logits = self.model(x,edge_index, gates, baselines)
-                    pred = F.softmax(logits, dim=-1)
+                    pred = F.log_softmax(logits, dim=-1)
                     self.model.set_get_vertex(True)
                     # print(real_pred.shape, pred.shape)
                     # sys.exit()
-                    loss_temp = self.loss(pred[node_idx], real_pred[node_idx])
+                    loss_temp = self.loss(pred[node_idx], real_pred)
                     g = torch.relu(loss_temp - self.allowance).mean()
                     f = total_penalty*self.penalty_scaling
                     loss2 = lagrangian_optimization.update(f, g, self.graphmask)
@@ -266,8 +279,8 @@ class GraphMaskExplainer(torch.nn.Module):
                     # optimizer.zero_grad()
                     # loss += loss_temp.detach().item()
                 print(pred[node_idx], real_pred[node_idx])
-                for i in range(len(gates)):
-                    print(f'layer{i}:',torch.sum(gates[i].detach(), dim=-1))
+                # for i in range(len(gates)):
+                #     print(f'layer{i}:',torch.sum(gates[i].detach(), dim=-1))
                 duration += time.perf_counter() - tic
 
 
@@ -294,13 +307,13 @@ class GraphMaskExplainer(torch.nn.Module):
         assert kwargs.get('node_idx') is not None, "please input the node_idx"
         # original value
         probs = probs.squeeze()[node_idx]
-        label = y[node_idx]
+
         # masked value
 
         x, edge_index, y, subset, _ = self.get_subgraph(node_idx, x, edge_index,y)
         new_node_idx = torch.where(subset == node_idx)[0]
 
-
+        label = y[new_node_idx]
         self.model.eval()
         self.model(x, edge_index)
         gates, baselines, total_penalty = self.graphmask(self.model, training = False)
@@ -316,7 +329,7 @@ class GraphMaskExplainer(torch.nn.Module):
         for i in range(len(gates)):
             gates[i] = gates[i][real_gate]
         data = Data(x=x, edge_index=edge_index,  y = y)
-        selected_nodes = calculate_selected_nodes(data, gates[0], top_k)
+        selected_nodes = calculate_selected_nodes(data, gates[-1], top_k)
         maskout_nodes_list = [node for node in range(data.x.shape[0]) if node not in selected_nodes]
         value_func = GnnNets_NC2value_func(self.model,
                                            node_idx=new_node_idx,

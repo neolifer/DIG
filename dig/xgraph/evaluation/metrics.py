@@ -12,9 +12,8 @@ import torch.nn as nn
 from typing import List, Union
 from torch import Tensor
 import numpy as np
-import cilog
 from torch_geometric.nn import MessagePassing
-
+import math
 
 
 def control_sparsity(mask, sparsity=None):
@@ -57,14 +56,14 @@ def control_sparsity(mask, sparsity=None):
 
 def fidelity(ori_probs: torch.Tensor, unimportant_probs: torch.Tensor) -> float:
 
-    drop_probability = ori_probs - unimportant_probs
+    drop_probability = torch.abs(ori_probs - unimportant_probs)
 
     return drop_probability.mean()
 
 
 def fidelity_inv(ori_probs: torch.Tensor, important_probs: torch.Tensor) -> float:
 
-    drop_probability = ori_probs - important_probs
+    drop_probability = torch.abs(ori_probs - important_probs)
 
     return drop_probability.mean().item()
 

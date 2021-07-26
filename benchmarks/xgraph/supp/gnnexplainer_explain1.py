@@ -57,7 +57,7 @@ def index_to_mask(index, size):
 
 def split_dataset(dataset):
     indices = []
-    num_classes = 4
+    num_classes = 8
     train_percent = 0.7
     for i in range(num_classes):
         index = (dataset.data.y == i).nonzero().view(-1)
@@ -171,65 +171,75 @@ print(len(list(dist_dict.keys())))
 #
 # visualize(data, edge_mask=edge_mask, top_k=6, plot_utils=plotutils, node_idx= node_idx, vis_name = 'gnnexplainer_gat.pdf', dist_dict = dist_dict)
 
+a = 0.5
+b = 0.05
+c = []
+while a < 1:
+    c.append(a)
+    a += b
+# --- Set the Sparsity to 0.5
+fidelity1 = []
+fidelity2 = []
+inv_fidelity1 = []
+inv_fidelity2 = []
+for sparsity in c:
+    # --- Create data collector and explanation processor ---
+    from dig.xgraph.evaluation import XCollector, ExplanationProcessor
+    x_collector = XCollector(sparsity)
+    x_collector2 = XCollector(sparsity)
+    # x_processor = ExplanationProcessor(model=model, device=device)
 
-# --- Set the Sparsity to 0.5 ---
-sparsity = 0.95
 
-# --- Create data collector and explanation processor ---
-from dig.xgraph.evaluation import XCollector, ExplanationProcessor
-x_collector = XCollector(sparsity)
-x_collector2 = XCollector(sparsity)
-# x_processor = ExplanationProcessor(model=model, device=device)
-
-
-index = -1
-KLDivLoss = nn.KLDivLoss(reduction='batchmean')
-for i, data in enumerate(dataloader):
+    index = -1
+    KLDivLoss = nn.KLDivLoss(reduction='batchmean')
+    data = dataset.data
     overlap_score = 0
     js_scroe = 0
-    for j, node_idx in enumerate(torch.where(data.test_mask == True)[0].tolist()[:1]):
-        index += 1
-        print(f'explain graph {i} node {node_idx}')
-        data.to(device)
+    for index, data in enumerate(dataloader):
+        for j, node_idx in tqdm(enumerate(torch.where(data.test_mask == True)[0].tolist()), total = len(torch.where(data.test_mask == True)[0].tolist())):
+            index += 1
+            # print(f'explain graph {i} node {node_idx}')
+            data.to(device)
 
-        if torch.isnan(data.y[0].squeeze()):
-            continue
+            if torch.isnan(data.y[node_idx].squeeze()):
+                continue
+            _, _, _, masks, related_preds = \
+                explainer(data.x, data.edge_index, sparsity=sparsity, num_classes=num_classes, node_idx=node_idx,y = data.y, control_sparsity = True)
+            _, _, _, masks2, related_preds2 = \
+                explainer2(data.x, data.edge_index, sparsity=sparsity, num_classes=num_classes, node_idx=node_idx,y = data.y, control_sparsity = True)
+            # s = 0
+            # for i in range(len(masks)):
+            #     overlap = torch.sum(masks[i]==masks2[i]).detach().item()
+            #     s += masks[i].shape[-1]
+            # overlap_score += overlap/s
+            # out1 = F.softmax(model(data.x, data.edge_index)[node_idx], dim = -1)
+            # out2 = F.softmax(model2(data.x, data.edge_index)[node_idx], dim = -1)
+            # log_mean_output = ((out1 + out2 )/2).log()
+            # print(out1, out2, log_mean_output)
+            # js_scroe += (KLDivLoss(log_mean_output, out1).detach().item() + KLDivLoss(log_mean_output, out2).detach().item())/2
+            # print(overlap/s, math.log(math.exp(1)+ (KLDivLoss(log_mean_output, out1).detach().item() + KLDivLoss(log_mean_output, out2).detach().item())/2))
+            x_collector.collect_data(masks, related_preds, data.y[node_idx].squeeze().long().item())
+            x_collector2.collect_data(masks2, related_preds2, data.y[node_idx].squeeze().long().item())
+            # if you only have the edge masks without related_pred, please feed sparsity controlled mask to
+            # obtain the result: x_processor(data, masks, x_collector)
+        # overlap_score = overlap_score/(j + 1)
+        # js_scroe = js_scroe/(j + 1)
+        fidelity1.append(x_collector.fidelity)
+        fidelity2.append(x_collector2.fidelity)
+        inv_fidelity1.append(x_collector.fidelity_inv)
+        inv_fidelity2.append(x_collector2.fidelity_inv)
+        print(
+            'GAT:',f'Fidelity: {x_collector.fidelity:.4f}\n'
+              f'Fidelity_inv: {x_collector.fidelity_inv:.4f}\n'
+              f'Sparsity: {x_collector.sparsity:.4f}\n')
+        #       f'Overlap/JS: {overlap_score/js_scroe:.4f}')
 
-        _, _, _, masks, related_preds = \
-            explainer(data.x, data.edge_index, sparsity=sparsity, num_classes=num_classes, node_idx=node_idx,y = data.y, control_sparsity = True)
-        _, _, _, masks2, related_preds2 = \
-            explainer2(data.x, data.edge_index, sparsity=sparsity, num_classes=num_classes, node_idx=node_idx,y = data.y, control_sparsity = True)
-        s = 0
-        for i in range(len(masks)):
-            overlap = torch.sum(masks[i]==masks2[i]).detach().item()
-            s += masks[i].shape[-1]
-        overlap_score += overlap/s
-        out1 = F.softmax(model(data.x, data.edge_index)[node_idx], dim = -1)
-        out2 = F.softmax(model2(data.x, data.edge_index)[node_idx], dim = -1)
-        log_mean_output = ((out1 + out2 )/2).log()
-        # print(out1, out2, log_mean_output)
-        js_scroe += (KLDivLoss(log_mean_output, out1).detach().item() + KLDivLoss(log_mean_output, out2).detach().item())/2
-        # print(overlap/s, math.log(math.exp(1)+ (KLDivLoss(log_mean_output, out1).detach().item() + KLDivLoss(log_mean_output, out2).detach().item())/2))
-        x_collector.collect_data(masks, related_preds, data.y[0].squeeze().long().item())
-        x_collector2.collect_data(masks2, related_preds2, data.y[0].squeeze().long().item())
-        # if you only have the edge masks without related_pred, please feed sparsity controlled mask to
-        # obtain the result: x_processor(data, masks, x_collector)
-        if index >= 99:
-            break
-    overlap_score = overlap_score/(j + 1)
-    js_scroe = js_scroe/(j + 1)
-    if index >= 99:
-        break
-
-print(
-    'GAT:',f'Fidelity: {x_collector.fidelity:.4f}\n'
-      f'Fidelity_inv: {x_collector.fidelity_inv:.4f}\n'
-      f'Sparsity: {x_collector.sparsity:.4f}\n'
-      f'Overlap/JS: {overlap_score/js_scroe:.4f}')
-
-print('GCN:',f'Fidelity: {x_collector2.fidelity:.4f}\n'
-      f'Fidelity_inv: {x_collector2.fidelity_inv:.4f}\n'
-      f'Sparsity: {x_collector2.sparsity:.4f}\n'
-      f'Overlap/JS: {overlap_score/js_scroe:.4f}')
-
+        print('GCN:',f'Fidelity: {x_collector2.fidelity:.4f}\n'
+              f'Fidelity_inv: {x_collector2.fidelity_inv:.4f}\n'
+              f'Sparsity: {x_collector2.sparsity:.4f}\n')
+              # f'Overlap/JS: {overlap_score/js_scroe:.4f}')
+print(f'GAT: fidelity:{fidelity1}\n'
+      f'inv_fidelity:{inv_fidelity1}\n'
+      f'GCN: fidelity:{fidelity2}\n'
+      f'inv_fidelity:{inv_fidelity2}')
 

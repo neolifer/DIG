@@ -67,7 +67,7 @@ def train_NC(parser,  lr ,head, dropout, wd2, hid_dim):
         logits= gnnNets_NC(data.x, data.edge_index)
         prob = F.log_softmax(logits, dim=-1)
 
-        loss = criterion(prob, data.y)
+        loss = criterion(prob[data.train_mask], data.y[data.train_mask])
         optimizer.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_value_(gnnNets_NC.parameters(), clip_value=2)
@@ -85,7 +85,7 @@ def train_NC(parser,  lr ,head, dropout, wd2, hid_dim):
         val_loss_history.append(eval_info['val_loss'])
 
         # only save the best model
-        is_best = (eval_info['test_acc'] >= best_acc)
+        is_best = (eval_info['val_acc'] >= best_acc)
 
         if eval_info['val_acc'] > best_acc:
             early_stop_count = 0
@@ -96,7 +96,7 @@ def train_NC(parser,  lr ,head, dropout, wd2, hid_dim):
         #     break
 
         if is_best:
-            best_acc = eval_info['test_acc']
+            best_acc = eval_info['val_acc']
         if is_best or epoch % parser.save_epoch == 0:
             save_best(ckpt_dir, epoch, gnnNets_NC, parser.model_name, eval_info['val_acc'], is_best)
             print(f'Epoch {epoch}, Train Loss: {eval_info["train_loss"]:.4f}, '
@@ -168,21 +168,21 @@ class ARGS():
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', default='GCN2', dest='gnn models')
-    parser.add_argument('--model_name', default='GM_GCN_100')
+    parser.add_argument('--model_name', default='GM_GCN')
     parser.add_argument('--model_level', default='node')
     parser.add_argument('--dim_hidden', default=20)
     parser.add_argument('--alpha', default=0.5)
     parser.add_argument('--theta', default=0.5)
     parser.add_argument('--num_layers', default=3)
     parser.add_argument('--shared_weights', default=False)
-    parser.add_argument('--dropout', default=0)
+    parser.add_argument('--dropout', default=0.5)
     parser.add_argument('--dataset_dir', default='../datasets/')
     parser.add_argument('--dataset_name', default='Ba_community')
     parser.add_argument('--epoch', default=1000)
     parser.add_argument('--save_epoch', default=10)
     parser.add_argument('--lr', default=0.01)
     parser.add_argument('--wd1', default=1e-3)
-    parser.add_argument('--wd2', default=0)
+    parser.add_argument('--wd2', default=1e-3)
     ps = parser.parse_args()
     heads = []
     for a in range(1,9):
@@ -191,9 +191,9 @@ if __name__ == '__main__':
                     heads.append([a,b,c])
     heads = [[7,4,1]]
     lrs = [0.01]
-    dropouts = [0]
-    wd2s = [0]
-    hid_dims = [300]
+    dropouts = [0.5]
+    wd2s = [3e-3]
+    hid_dims = [20]
     best_acc = 0
     best_parameters = []
     from itertools import product

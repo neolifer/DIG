@@ -330,7 +330,7 @@ ax, G = explainer.visualize_subgraph(data.x, node_idx, data.edge_index, hard_edg
 
 # plt.show()
 plt.savefig('gnn_explainer.png')
-print(1)
+
 # --- Set the Sparsity to 0.5 ---
 sparsity = 0.5
 

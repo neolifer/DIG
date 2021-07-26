@@ -34,33 +34,39 @@ parser.add_argument('--wd2', default=1e-5)
 parser = parser.parse_args()
 
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+torch.manual_seed(42)
+import random
+random.seed(0)
+import numpy as np
+np.random.seed(0)
+
+
 
 def index_to_mask(index, size):
     mask = torch.zeros(size, dtype=torch.bool, device=index.device)
     mask[index] = 1
     return mask
 
-def split_dataset(dataset):
-    indices = []
-    num_classes = 4
-    train_percent = 0.7
-    for i in range(num_classes):
-        index = (dataset.data.y == i).nonzero().view(-1)
-        index = index[torch.randperm(index.size(0))]
-        indices.append(index)
-
-    train_index = torch.cat([i[:int(len(i) * train_percent)] for i in indices], dim=0)
-
-    rest_index = torch.cat([i[int(len(i) * train_percent):] for i in indices], dim=0)
-    rest_index = rest_index[torch.randperm(rest_index.size(0))]
-
-    dataset.data.train_mask = index_to_mask(train_index, size=dataset.data.num_nodes)
-    dataset.data.val_mask = index_to_mask(rest_index[:len(rest_index) // 2], size=dataset.data.num_nodes)
-    dataset.data.test_mask = index_to_mask(rest_index[len(rest_index) // 2:], size=dataset.data.num_nodes)
-
-    dataset.data, dataset.slices = dataset.collate([dataset.data])
-
-    return dataset
+# def split_dataset(dataset, num_classes):
+#     indices = []
+#     train_percent = 0.7
+#     for i in range(num_classes):
+#         index = (dataset.data.y == i).nonzero().view(-1)
+#         index = index[torch.randperm(index.size(0))]
+#         indices.append(index)
+#
+#     train_index = torch.cat([i[:int(len(i) * train_percent)] for i in indices], dim=0)
+#
+#     rest_index = torch.cat([i[int(len(i) * train_percent):] for i in indices], dim=0)
+#     rest_index = rest_index[torch.randperm(rest_index.size(0))]
+#
+#     dataset.data.train_mask = index_to_mask(train_index, size=dataset.data.num_nodes)
+#     dataset.data.val_mask = index_to_mask(rest_index[:len(rest_index) // 2], size=dataset.data.num_nodes)
+#     dataset.data.test_mask = index_to_mask(rest_index[len(rest_index) // 2:], size=dataset.data.num_nodes)
+#
+#     dataset.data, dataset.slices = dataset.collate([dataset.data])
+#
+#     return dataset
 
 dataset = get_dataset(parser)
 # dim_node = dataset.num_node_features
@@ -74,10 +80,10 @@ dim_edge = dataset.num_edge_features
 # num_targets = dataset.num_classes
 num_classes = dataset.num_classes
 
-splitted_dataset = split_dataset(dataset)
-splitted_dataset.data.mask = splitted_dataset.data.test_mask
-splitted_dataset.slices['mask'] = splitted_dataset.slices['train_mask']
-dataloader = DataLoader(splitted_dataset, batch_size=1, shuffle=False)
+# splitted_dataset = split_dataset(dataset, num_classes)
+# splitted_dataset.data.mask = splitted_dataset.data.test_mask
+# splitted_dataset.slices['mask'] = splitted_dataset.slices['train_mask']
+dataloader = DataLoader(dataset, batch_size=1, shuffle=False)
 
 
 def check_checkpoints(root='./'):
@@ -100,6 +106,7 @@ dropout=parser.dropout
 # model = GCN2_mask(model_level, dim_node, dim_hidden, num_classes, alpha, theta, num_layers,
 #                    shared_weights, dropout)
 # model = GM_GCN(n_layers = num_layers, input_dim = dim_node, hid_dim = dim_hidden, n_classes = num_classes)
+
 model = GM_GAT(num_layers, dim_node, 300, num_classes, heads = [7,4,1])
 
 model.to(device)
@@ -122,7 +129,7 @@ GraphMask.cuda()
 
 explainer = GraphMaskExplainer(model, GraphMask)
 
-explainer.train_graphmask(splitted_dataset)
+explainer.train_graphmask(dataset)
 torch.save(GraphMask.state_dict(), 'tmp.pt')
 state_dict = torch.load('tmp.pt')
 GraphMask.load_state_dict(state_dict)
@@ -185,9 +192,3 @@ print(f'Fidelity: {x_collector.fidelity:.4f}\n'
       f'Fidelity_inv: {x_collector.fidelity_inv:.4f}\n'
       f'Sparsity: {x_collector.sparsity:.4f}')
 
-def run():
-    torch.multiprocessing.freeze_support()
-    print('loop')
-
-if __name__ == '__main__':
-    run()

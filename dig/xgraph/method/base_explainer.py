@@ -148,8 +148,8 @@ class ExplainerBase(nn.Module):
             important_indices = indices[: split_point]
             unimportant_indices = indices[split_point:]
             trans_mask = mask.clone()
-            trans_mask[important_indices] = float('inf')
-            trans_mask[unimportant_indices] = - float('inf')
+            trans_mask[important_indices] = 1
+            trans_mask[unimportant_indices] = 0
 
         return trans_mask
 
@@ -412,26 +412,25 @@ class ExplainerBase(nn.Module):
 
         for ex_label, edge_mask in enumerate(edge_masks):
 
-            self.edge_mask.data = float('inf') * torch.ones(edge_mask.size(), device=self.device)
+            self.edge_mask.data = 1 * torch.ones(edge_mask.size(), device=self.device)
             ori_pred = self.model(x, edge_index, **kwargs)
 
             self.edge_mask.data = edge_mask
             masked_pred = self.model(x,edge_index, **kwargs)
 
             # mask out important elements for fidelity calculation
-            self.edge_mask.data = - edge_mask  # keep Parameter's id
+            self.edge_mask.data = 1- edge_mask  # keep Parameter's id
             maskout_pred = self.model(x, edge_index, **kwargs)
 
             # zero_mask
-            self.edge_mask.data = - float('inf') * torch.ones(edge_mask.size(), device=self.device)
+            self.edge_mask.data =  torch.zeros(edge_mask.size(), device=self.device)
             zero_mask_pred = self.model(x, edge_index, **kwargs)
 
             related_preds.append({'zero': zero_mask_pred[node_idx],
                                   'masked': masked_pred[node_idx],
                                   'maskout': maskout_pred[node_idx],
                                   'origin': ori_pred[node_idx]})
-            print(related_preds)
-            sys.exit()
+
             # Adding proper activation function to the models' outputs.
             related_preds[ex_label] = {key: pred.softmax(0)[ex_label].item()
                                     for key, pred in related_preds[ex_label].items()}
@@ -539,25 +538,27 @@ class WalkBase(ExplainerBase):
         related_preds = []
 
         for label, mask in enumerate(masks):
-            zeros = torch.where(mask < 0)
-            nonzeros = torch.where(mask > 0)
             # origin pred
+            # zeros = torch.where(mask < 0)[0].tolist()
+            # nonzeros = torch.where(mask > 0)[0].tolist()
+            # maskout = mask
+            # maskout[zeros] = 1
+            # maskout[nonzeros] = 0
+            # mask[zeros] = 0
+            # mask[nonzeros] = 1
+
+
             for edge_mask in self.edge_mask:
                 edge_mask.data = torch.ones(mask.size(), device=self.device)
 
             ori_pred = self.model(x, edge_index, **kwargs)
             for edge_mask in self.edge_mask:
-
                 edge_mask.data = mask
-                edge_mask.data[zeros] = 0
-                edge_mask.data[nonzeros] = 1
             masked_pred = self.model(x, edge_index, **kwargs)
 
             # mask out important elements for fidelity calculation
             for edge_mask in self.edge_mask:
-                edge_mask.data = - mask
-                edge_mask.data[zeros] = 1
-                edge_mask.data[nonzeros] = 0
+                edge_mask.data = 1-mask
             maskout_pred = self.model(x, edge_index, **kwargs)
 
             # zero_mask
@@ -591,7 +592,41 @@ class WalkBase(ExplainerBase):
         # edge_attr1 = (idx_ensemble1 * (walks_score.unsqueeze(1))).sum(0)
 
         return edge_attr - hard_edge_attr_mask_value
+    def control_sparsity(self, mask, sparsity=None, **kwargs):
+        r"""
 
+        :param mask: mask that need to transform
+        :param sparsity: sparsity we need to control i.e. 0.7, 0.5
+        :return: transformed mask where top 1 - sparsity values are set to inf.
+        """
+        if sparsity is None:
+            sparsity = 0.7
+
+        if not self.explain_graph:
+            assert self.hard_edge_mask is not None
+            mask_indices = torch.where(self.hard_edge_mask)[0]
+            sub_mask = mask[self.hard_edge_mask]
+            mask_len = sub_mask.shape[0]
+            _, sub_indices = torch.sort(sub_mask, descending=True)
+            split_point = int((1 - sparsity) * mask_len)
+            important_sub_indices = sub_indices[: split_point]
+            important_indices = mask_indices[important_sub_indices]
+            unimportant_sub_indices = sub_indices[split_point:]
+            unimportant_indices = mask_indices[unimportant_sub_indices]
+            trans_mask = mask.clone()
+            trans_mask[:] = - float('inf')
+            trans_mask[important_indices] = float('inf')
+        else:
+            _, indices = torch.sort(mask, descending=True)
+            mask_len = mask.shape[0]
+            split_point = int((1 - sparsity) * mask_len)
+            important_indices = indices[: split_point]
+            unimportant_indices = indices[split_point:]
+            trans_mask = mask.clone()
+            trans_mask[important_indices] = 1
+            trans_mask[unimportant_indices] = 0
+
+        return trans_mask
     class connect_mask(object):
 
         def __init__(self, cls):

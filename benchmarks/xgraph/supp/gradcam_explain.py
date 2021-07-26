@@ -13,6 +13,7 @@ import os.path as osp
 import os
 from PGExplainer.load_dataset import get_dataset, get_dataloader
 import argparse
+from tqdm import tqdm
 parser = argparse.ArgumentParser()
 parser.add_argument('--model', default='GCN2', dest='gnn models')
 parser.add_argument('--model_name', default='GCN2')
@@ -40,7 +41,7 @@ def index_to_mask(index, size):
     return mask
 def split_dataset(dataset):
     indices = []
-    num_classes = 4
+    num_classes = 8
     train_percent = 0.7
     for i in range(num_classes):
         index = (dataset.data.y == i).nonzero().view(-1)
@@ -106,47 +107,67 @@ dropout=parser.dropout
 # model.load_state_dict(torch.load(ckpt_path)['net'])
 # ckpt_path = osp.join('checkpoints', 'ba_shapes', 'GCN_2l', '0', 'GCN_2l_best.ckpt')
 # model.load_state_dict(torch.load(ckpt_path)['state_dict'])
-model = GCN_mask(num_layers, dim_node, dim_hidden, num_classes)
+model = GM_GCN(num_layers, dim_node, dim_hidden, num_classes)
 ckpt_path = osp.join('checkpoints', 'ba_community', 'GM_GCN','GM_GCN_100_best.pth')
 model.load_state_dict(torch.load(ckpt_path)['net'])
 model.to(device)
+# model = GAT(num_layers, dim_node, 300, num_classes, heads = [7,4,1])
+# model.to(device)
+# ckpt_path = osp.join('checkpoints', 'ba_community', 'GAT','GAT_100_best.pth')
+# model.load_state_dict(torch.load(ckpt_path)['net'])
 
-
-node_indices = torch.where(dataset[0].test_mask * dataset[0].y != 0)[0].tolist()
-data = dataset[0].cuda()
-node_idx = node_indices[6]
+# node_indices = torch.where(dataset[0].test_mask * dataset[0].y != 0)[0].tolist()
+# data = dataset[0].cuda()
+# node_idx = node_indices[6]
 from dig.xgraph.method import GradCAM
 explainer = GradCAM(model, explain_graph=False)
+torch.manual_seed(42)
+import random
+random.seed(0)
+import numpy as np
+np.random.seed(0)
+a = 0.5
+b = 0.05
+c = []
+while a < 1:
+    c.append(a)
+    a += b
+# --- Set the Sparsity to 0.5
+fidelitys = []
+inv_fidelitys = []
+for sparsity in c:
+    data = dataset[0].cuda()
+    # --- Create data collector and explanation processor ---
+    from dig.xgraph.evaluation import XCollector, ExplanationProcessor
+    x_collector = XCollector(sparsity)
+    # x_processor = ExplanationProcessor(model=model, device=device)
 
-# --- Set the Sparsity to 0.5 ---
-sparsity = 0.95
-data = dataset[0].cuda()
-# --- Create data collector and explanation processor ---
-from dig.xgraph.evaluation import XCollector, ExplanationProcessor
-x_collector = XCollector(sparsity)
-# x_processor = ExplanationProcessor(model=model, device=device)
+    for index, data in enumerate(dataloader):
+        for j, node_idx in tqdm(enumerate(torch.where(data.test_mask)[0].tolist())):
+            # print(f'explain graph line {dataloader.dataset.indices[index] + 2}')
+            # print(f'explain node {node_idx}')
+            data.to(device)
 
-for index, data in enumerate(dataloader):
-    for j, node_idx in enumerate(torch.where(data.test_mask)[0].tolist()):
-        # print(f'explain graph line {dataloader.dataset.indices[index] + 2}')
-        print(f'explain node {node_idx}')
-        data.to(device)
+            if torch.isnan(data.y[node_idx].squeeze()):
+                continue
 
-        if torch.isnan(data.y[0].squeeze()):
-            continue
+            walks, masks, related_preds = \
+                explainer(data, sparsity=sparsity, num_classes=num_classes, node_idx=node_idx)
 
-        walks, masks, related_preds = \
-            explainer(data, sparsity=sparsity, num_classes=num_classes, node_idx=node_idx)
+            x_collector.collect_data(masks, related_preds, data.y[node_idx].squeeze().long().item())
 
-        x_collector.collect_data(masks, related_preds, data.y[0].squeeze().long().item())
+            # if you only have the edge masks without related_pred, please feed sparsity controlled mask to
+            # obtain the result: x_processor(data, masks, x_collector)
+        #     if index >= 99:
+        #         break
+        # if index >= 99:
+        #     break
+    fidelity = x_collector.fidelity.item()
+    inv_fidelity = x_collector.fidelity_inv
+    fidelitys.append(fidelity)
+    inv_fidelitys.append(inv_fidelity)
+    print(f'Fidelity: {fidelity:.4f}\n'
+          f'Fidelity_inv: {inv_fidelity :.4f}\n'
+          f'Sparsity: {x_collector.sparsity:.4f}')
 
-        # if you only have the edge masks without related_pred, please feed sparsity controlled mask to
-        # obtain the result: x_processor(data, masks, x_collector)
-        if index >= 99:
-            break
-    if index >= 99:
-        break
-
-print(f'Fidelity: {x_collector.fidelity:.4f}\n'
-      f'Fidelity_inv: {x_collector.fidelity_inv:.4f}\n'
-      f'Sparsity: {x_collector.sparsity:.4f}')
+print(fidelitys, inv_fidelitys)

@@ -1328,6 +1328,7 @@ class GCN_mask(nn.Module):
         self.outlayer = nn.Linear(hid_dim, n_classes)
         self.relu = nn.ReLU()
         self.dropout = nn.Dropout(dropout)
+        # self.bn = torch.nn.BatchNorm1d(hid_dim)
         # self.bn = nn.BatchNorm1d(hid_dim)
         for conv in self.convs:
             conv.chache = None
@@ -1338,10 +1339,12 @@ class GCN_mask(nn.Module):
         else:
              x, edge_index = args[0], args[1]
 
-        for conv in self.convs:
+        for i,conv in enumerate(self.convs):
             x = conv(x, edge_index)
             x = self.relu(x)
             x = self.dropout(x)
+            # if i != len(self.convs) - 1:
+            #     x = self.bn(x)
         x = self.outlayer(x)
         return x
 
@@ -1350,8 +1353,11 @@ class GCN_mask(nn.Module):
             x, edge_index = args[0].x, args[0].edge_index
         else:
             x, edge_index = args[0], args[1]
-        for conv in self.convs:
+
+        for i,conv in enumerate(self.convs):
             x = conv(x, edge_index)
             x = self.relu(x)
+            # if i != len(self.convs) - 1:
+            #     x = self.bn(x)
         return x
 
