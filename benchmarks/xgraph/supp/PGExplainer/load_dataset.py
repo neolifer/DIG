@@ -107,7 +107,8 @@ def get_dataset(data_args):
         'BA_2Motifs'.lower(): 'BA_2Motifs',
         'BA_Shapes'.lower(): 'BA_shapes',
         'BA_Community'.lower(): 'BA_Community',
-        'Tree_Cycle'.lower():'Tree_Cycle'
+        'Tree_Cycle'.lower():'Tree_Cycle',
+        'Tree_Grids'.lower():'Tree_Grids'
     }
     sentigraph_names = ['Graph_SST2']
     sentigraph_names = [name.lower() for name in sentigraph_names]

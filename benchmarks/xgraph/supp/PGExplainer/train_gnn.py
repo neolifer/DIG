@@ -13,11 +13,18 @@ import argparse
 from load_dataset import  get_dataset, get_dataloader
 import sys
 from tqdm import tqdm
+from torch_geometric.datasets import CitationFull, Planetoid
+import torch_geometric.transforms as T
+
+
 def train_NC(parser,  lr ,head, dropout, wd2, hid_dim):
     GNNs = {'GCN2': GCN2}
     # print('start loading data====================')
     # import pdb; pdb.set_trace()
-    dataset = get_dataset(parser)
+    if parser.dataset_name != 'Cora':
+        dataset = get_dataset(parser)
+    else:
+        dataset = Planetoid('../datasets', 'Cora',split="public", transform = T.NormalizeFeatures())
     dataset.data.x = dataset.data.x.to(torch.float32)
     # dataset.data.x = dataset.data.x[:, :1]
     input_dim = dataset.num_node_features
@@ -39,28 +46,35 @@ def train_NC(parser,  lr ,head, dropout, wd2, hid_dim):
     theta=parser.theta
     num_layers=parser.num_layers
     shared_weights=parser.shared_weights
-
+    wd1 = parser.wd1
 
 
     data = dataset[0]
 
-    # gnnNets_NC = GM_GCN2(model_level, dim_node, dim_hidden, num_classes, alpha, theta, num_layers,
-    #                               shared_weights, dropout)
+    gnnNets_NC = GM_GCN2(model_level, dim_node, dim_hidden, num_classes, alpha, theta, num_layers,
+                                  shared_weights, dropout)
+    for conv in gnnNets_NC.convs:
+        conv.get_vertex = False
     # gnnNets_NC = GCN_2l(model_level, dim_node, dim_hidden, num_classes)
-    gnnNets_NC = GM_GCN(num_layers, dim_node, hid_dim, num_classes)
+    # gnnNets_NC = GM_GCN(num_layers, dim_node, hid_dim, num_classes)
     # gnnNets_NC = GAT(num_layers, dim_node, hid_dim, num_classes, dropout, heads = head)
     # gnnNets_NC = GraphSAGE(num_layers, dim_node, dim_hidden, num_classes)
     gnnNets_NC = gnnNets_NC.cuda()
     criterion = nn.NLLLoss()
-
-    optimizer = Adam(gnnNets_NC.parameters(), lr=lr, weight_decay=wd2)
+    reg_params = list(gnnNets_NC.convs.parameters())
+    non_reg_params = list(gnnNets_NC.fcs.parameters())
+    optimizer = torch.optim.Adam([
+        dict(params=reg_params, weight_decay= wd1),
+        dict(params=non_reg_params, weight_decay=wd2)
+    ], lr=lr)
+    # optimizer = torch.optim.Adam(params=gnnNets_NC.parameters(), weight_decay= wd2, lr=lr)
 
     best_val_loss = float('inf')
     best_acc = 0
     val_loss_history = []
     early_stop_count = 0
     data = data.cuda()
-
+    stop_val_loss = float('inf')
     for epoch in range(1, parser.epoch + 1):
         gnnNets_NC.train()
 
@@ -87,13 +101,14 @@ def train_NC(parser,  lr ,head, dropout, wd2, hid_dim):
         # only save the best model
         is_best = (eval_info['val_acc'] >= best_acc)
 
-        if eval_info['val_acc'] > best_acc:
+        if eval_info['val_loss'] < stop_val_loss:
             early_stop_count = 0
+            stop_val_loss = eval_info['val_loss']
         else:
             early_stop_count += 1
 
-        # if early_stop_count > parser.early_stopping:
-        #     break
+        if early_stop_count > parser.early_stopping:
+            break
 
         if is_best:
             best_acc = eval_info['val_acc']
@@ -168,32 +183,38 @@ class ARGS():
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', default='GCN2', dest='gnn models')
-    parser.add_argument('--model_name', default='GM_GCN')
+    parser.add_argument('--model_name', default='GCN2')
     parser.add_argument('--model_level', default='node')
-    parser.add_argument('--dim_hidden', default=20)
-    parser.add_argument('--alpha', default=0.5)
+    parser.add_argument('--dim_hidden', default=64)
+    parser.add_argument('--alpha', default=0.1)
     parser.add_argument('--theta', default=0.5)
-    parser.add_argument('--num_layers', default=3)
+    parser.add_argument('--num_layers', default=64)
     parser.add_argument('--shared_weights', default=False)
     parser.add_argument('--dropout', default=0.5)
     parser.add_argument('--dataset_dir', default='../datasets/')
-    parser.add_argument('--dataset_name', default='Ba_community')
-    parser.add_argument('--epoch', default=1000)
+    parser.add_argument('--dataset_name', default='Cora')
+    parser.add_argument('--epoch', default=1500)
     parser.add_argument('--save_epoch', default=10)
     parser.add_argument('--lr', default=0.01)
-    parser.add_argument('--wd1', default=1e-3)
-    parser.add_argument('--wd2', default=1e-3)
+    parser.add_argument('--wd1', default=1e-2)
+    parser.add_argument('--wd2', default=5e-4)
+    parser.add_argument('--early_stopping', default=100)
     ps = parser.parse_args()
     heads = []
+    import random
+    import numpy as np
+    torch.manual_seed(42)
+    random.seed(0)
+    np.random.seed(0)
     for a in range(1,9):
         for b in range(1,9):
                 for c in range(1,4):
                     heads.append([a,b,c])
-    heads = [[7,4,1]]
-    lrs = [0.01]
-    dropouts = [0.5]
-    wd2s = [3e-3]
-    hid_dims = [20]
+    heads = [[8,]]
+    lrs = [1e-2]
+    dropouts = [0.6]
+    wd2s = [5e-4]
+    hid_dims = [64]
     best_acc = 0
     best_parameters = []
     from itertools import product

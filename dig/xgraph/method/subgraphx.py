@@ -1,6 +1,8 @@
 import os
 import math
 import copy
+import sys
+
 import torch
 import numpy as np
 import networkx as nx
@@ -356,6 +358,7 @@ class MCTS(object):
         self.graph = to_networkx(self.data, to_undirected=True)
         self.data = Batch.from_data_list([self.data])
         self.num_nodes = self.graph.number_of_nodes()
+        self.num_edges = self.graph.number_of_edges()
         self.score_func = score_func
         self.n_rollout = n_rollout
         self.min_atoms = min_atoms
@@ -375,6 +378,7 @@ class MCTS(object):
             self.graph = nx.relabel_nodes(self.graph, mapping)
             self.node_idx = torch.where(subset == self.ori_node_idx)[0]
             self.num_nodes = self.graph.number_of_nodes()
+            self.num_edges = self.graph.number_of_edges()
             self.subset = subset
 
         self.root_coalition = sorted([node for node in range(self.num_nodes)])
@@ -633,7 +637,7 @@ class SubgraphX(object):
         labels = tuple(label for label in range(self.num_classes))
         ex_labels = tuple(torch.tensor([label]).to(self.device) for label in labels)
         data = Data(x = x, edge_index = edge_index)
-        logits = self.model(data)
+        logits = self.model(data.x, data.edge_index)
         probs = F.softmax(logits, dim=-1)
         probs = probs.squeeze()
         explanation_results = []
@@ -663,14 +667,22 @@ class SubgraphX(object):
         else:
             prediction = probs[node_idx].argmax(-1)
             for label in ex_labels:
+                if label != prediction:
+                    continue
+                import time
+                start = time.time()
                 self.mcts_state_map = self.get_mcts_class(x, edge_index, node_idx=node_idx)
+                print(time.time() - start)
                 self.node_idx = self.mcts_state_map.node_idx
                 # mcts will extract the subgraph and relabel the nodes
                 value_func = GnnNets_NC2value_func(self.model,
                                                    node_idx=self.mcts_state_map.node_idx,
                                                    target_class=label)
+                start = time.time()
                 payoff_func = self.get_reward_func(value_func, node_idx=self.mcts_state_map.node_idx)
+                print(time.time() - start)
                 self.mcts_state_map.set_score_func(payoff_func)
+                start = time.time()
                 results = self.mcts_state_map.mcts(verbose=False)
 
                 tree_node_x = find_closest_node_result(results, max_nodes=max_nodes)

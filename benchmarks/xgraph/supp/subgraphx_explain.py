@@ -90,7 +90,7 @@ def check_checkpoints(root='./'):
 # ckpt_path = osp.join('checkpoints', 'ba_shapes', 'GCN_2l', '0', 'GCN_2l_best.ckpt')
 # model.load_state_dict(torch.load(ckpt_path)['state_dict'])
 
-model = GCN_mask(num_layers, dim_node, dim_hidden, num_classes)
+model = GM_GCN(num_layers, dim_node, dim_hidden, num_classes)
 ckpt_path = osp.join('checkpoints', 'ba_community', 'GM_GCN','GM_GCN_100_best.pth')
 model.load_state_dict(torch.load(ckpt_path)['net'])
 model.to(device)
@@ -128,8 +128,19 @@ plotutils = PlotUtils(dataset_name='ba_community')
 #                         max_nodes=max_nodes,
 #                         plot_utils=plotutils,
 #                         y=data.y)
+a = 0.5
+b = 0.05
+c = []
+while a < 1:
+    c.append(a)
+    a += b
 
+
+sparsitys = []
 max_nodes = 5
+large_index = pk.load(open('large_subgraph_bacom.pk','rb'))['node_idx']
+motif = pk.load(open('Ba_Community_motif.plk','rb'))
+node_indices = list(set(large_index).intersection(set(motif.keys())))
 for node_idx in node_indices:
     index += 1
     print(f'explain graph node {node_idx}')
@@ -138,7 +149,7 @@ for node_idx in node_indices:
     if torch.isnan(data.y[0].squeeze()):
         continue
 
-    logits = model(data)
+    logits = model(data.x, data.edge_index)
     prediction = logits[node_idx].argmax(-1).item()
 
     _, explanation_results, related_preds = \

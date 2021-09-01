@@ -5,7 +5,7 @@ from torch import Tensor
 from torch.nn import Module
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.utils.loop import add_self_loops
+from torch_geometric.utils.loop import add_self_loops,add_remaining_self_loops
 from ..models.utils import subgraph, normalize
 import captum.attr as ca
 from captum.attr._utils.typing import (
@@ -56,7 +56,7 @@ class GradCAM(WalkBase):
     def __init__(self, model, explain_graph=False):
         super().__init__(model, explain_graph)
 
-    def forward(self,data, **kwargs)\
+    def forward(self,data, evaluation_confidence, control_sparsity = True, **kwargs)\
             -> Union[Tuple[None, List, List[Dict]], Tuple[Dict, List, List[Dict]]]:
         r"""
         Run the explainer for a specific graph instance.
@@ -88,15 +88,21 @@ class GradCAM(WalkBase):
         ex_labels = tuple(torch.tensor([label]).to(self.device) for label in labels)
 
 
-        self_loop_edge_index, _ = add_self_loops(edge_index, num_nodes=self.num_nodes)
+        # self_loop_edge_index, _ = add_remaining_self_loops(edge_index, num_nodes=self.num_nodes)
 
         if not self.explain_graph:
             node_idx = kwargs.get('node_idx')
             assert node_idx is not None
-            _, _, _, self.hard_edge_mask = subgraph(
-                node_idx, self.__num_hops__, self_loop_edge_index, relabel_nodes=True,
+            self.node_idx = node_idx
+            subset, new_edge_index, inv, self.hard_edge_mask = subgraph(
+                node_idx, self.__num_hops__, edge_index, relabel_nodes=True,
                 num_nodes=None, flow=self.__flow__())
-
+        new_edge_index = add_remaining_self_loops(new_edge_index)[0]
+        new_x = x[subset]
+        #
+        new_node_index = int(torch.where(subset == node_idx)[0])
+        self.node_idx = new_node_index
+        # self.node_idx = new_node_index
         # --- setting GradCAM ---
         class model_node(nn.Module):
             def __init__(self, cls):
@@ -104,31 +110,46 @@ class GradCAM(WalkBase):
                 self.cls = cls
                 self.convs = cls.model.convs
             def forward(self, *args, **kwargs):
-                return self.cls.model(*args, **kwargs)[node_idx].unsqueeze(0)
+                return self.cls.model(*args, **kwargs)[new_node_index].unsqueeze(0)
         # if self.explain_graph:
-        model = self.model
+        # model = self.model
         # else:
-        #     model = model_node(self)
+        model = model_node(self)
         self.explain_method = GraphLayerGradCam(model, model.convs[-1])
         # --- setting end ---
-
+        label = F.softmax(self.model(new_x, new_edge_index, **kwargs), dim = -1)[new_node_index].squeeze().argmax(-1)
         masks = []
         for ex_label in ex_labels:
-            attr_wo_relu = self.explain_method.attribute(x, ex_label, additional_forward_args=edge_index)
+            if ex_label != label:
+                masks.append(None)
+                continue
+            attr_wo_relu = self.explain_method.attribute(new_x, ex_label, additional_forward_args=new_edge_index)
             mask = normalize(attr_wo_relu.relu())
             mask = mask.squeeze()
-            mask = (mask[self_loop_edge_index[0]] + mask[self_loop_edge_index[1]]) / 2
-            mask = self.control_sparsity(mask, kwargs.get('sparsity'))
+            mask = (mask[new_edge_index[0]] + mask[new_edge_index[1]]) / 2
+            if control_sparsity:
+                mask = self.control_sparsity(mask, kwargs.get('sparsity'))
             masks.append(mask.detach())
         # Store related predictions for further evaluation.
+        related_preds = []
+        for e in evaluation_confidence:
+            sparsity = 1
+            confidence = 0
+            while confidence < e:
+                edge_mask= self.control_sparsity(masks[label], sparsity = sparsity)
+                with torch.no_grad():
+                    temp = self.eval_related_pred(new_x, new_edge_index, edge_mask, label, **kwargs)
+                confidence = temp[0]['evaluation_confidence'].item()
+                if confidence >= e:
+                    related_preds.append(sparsity)
+                    break
+                else:
+                    sparsity -= 0.05
 
-        with torch.no_grad():
-            with self.connect_mask(self):
-                related_preds = self.eval_related_pred(x, edge_index, masks, **kwargs)
 
 
 
-        return None, masks, related_preds
+        return self.hard_edge_mask, x, new_edge_index, masks, related_preds
 
 
 class GraphLayerGradCam(ca.LayerGradCam):

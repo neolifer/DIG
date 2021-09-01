@@ -2,11 +2,12 @@ import sys
 
 import torch
 from torch import Tensor
-from torch_geometric.utils.loop import add_self_loops, remove_self_loops
+from torch_geometric.utils.loop import add_self_loops, remove_self_loops, add_remaining_self_loops
 from dig.version import debug
 from ..models.utils import subgraph
 from torch.nn.functional import cross_entropy
 from .base_explainer import ExplainerBase
+from torch.nn import functional as F
 from torch_geometric.data import Data, Batch,DataLoader
 
 EPS = 1e-15
@@ -80,7 +81,8 @@ class GNNExplainer(ExplainerBase):
         # train to get the mask
         optimizer = torch.optim.Adam([self.node_feat_mask, self.edge_mask],
                                      lr=self.lr)
-
+        for conv in self.model.convs:
+            conv.require_sigmoid = True
         for epoch in range(1, self.epochs + 1):
 
             if mask_features:
@@ -95,10 +97,11 @@ class GNNExplainer(ExplainerBase):
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-
+        for conv in self.model.convs:
+            conv.require_sigmoid = False
         return self.edge_mask.data
 
-    def forward(self, x, edge_index, y,mask_features=False, control_sparsity = False, **kwargs):
+    def forward(self, x, edge_index, y,evaluation_confidence, mask_features=False, control_sparsity = False,**kwargs):
         r"""
         Run the explainer for a specific graph instance.
 
@@ -126,41 +129,58 @@ class GNNExplainer(ExplainerBase):
         super().forward(x=x, edge_index=edge_index, **kwargs)
         self.model.eval()
 
-        self_loop_edge_index, _ = add_self_loops(edge_index, num_nodes=self.num_nodes)
+        # self_loop_edge_index, _ = add_remaining_self_loops(edge_index, num_nodes=self.num_nodes)
 
         # Only operate on a k-hop subgraph around `node_idx`.
         # Get subgraph and relabel the node, mapping is the relabeled given node_idx.
-        if not self.explain_graph:
-            node_idx = kwargs.get('node_idx')
-            self.node_idx = node_idx
-            assert node_idx is not None
-            subset, new_edge_index, inv, self.hard_edge_mask = subgraph(
-                node_idx, self.__num_hops__, self_loop_edge_index, relabel_nodes=True,
-                num_nodes=None, flow=self.__flow__())
+        # if not self.explain_graph:
+        node_idx = kwargs.get('node_idx')
+        self.node_idx = node_idx
+        #     assert node_idx is not None
+        subset, new_edge_index, inv, self.hard_edge_mask = subgraph(
+            node_idx, self.__num_hops__, edge_index, relabel_nodes=True,
+            num_nodes=None, flow=self.__flow__())
+        # return None,None,None,None, new_edge_index.shape[-1]
         new_x = x[subset]
-        new_y = y[subset]
-
+        # new_y = y[subset]
+        new_node_index = int(torch.where(subset == node_idx)[0])
+        self.node_idx = new_node_index
         # Assume the mask we will predict
+        new_edge_index = add_remaining_self_loops(new_edge_index)[0]
+
         labels = tuple(i for i in range(kwargs.get('num_classes')))
         ex_labels = tuple(torch.tensor([label]).to(self.device) for label in labels)
-
+        self.model.to(x.device)
+        label = F.softmax(self.model(new_x, new_edge_index, **kwargs), dim = -1)[new_node_index].squeeze().argmax(-1)
         # Calculate mask
         edge_masks = []
         for ex_label in ex_labels:
             self.__clear_masks__()
-            self.__set_masks__(x, self_loop_edge_index)
+            self.__set_masks__(new_x, new_edge_index)
+            if not ex_label == label:
+                edge_masks.append(None)
+                continue
             if control_sparsity:
-                edge_masks.append(self.control_sparsity(self.gnn_explainer_alg(x, edge_index, ex_label), sparsity=kwargs.get('sparsity')))
+                edge_masks.append(self.control_sparsity(self.gnn_explainer_alg(new_x, new_edge_index, ex_label), sparsity=kwargs.get('sparsity')))
             else:
-                edge_masks.append(self.gnn_explainer_alg(x, edge_index, ex_label))
-
-
-        with torch.no_grad():
-            related_preds = self.eval_related_pred(x, edge_index, edge_masks, **kwargs)
-
+                edge_masks.append(self.gnn_explainer_alg(new_x, new_edge_index, ex_label))
+        related_preds = []
+        for e in evaluation_confidence:
+            sparsity = 1
+            confidence = 0
+            while confidence < e:
+                edge_mask= self.control_sparsity(edge_masks[label], sparsity = sparsity)
+                with torch.no_grad():
+                    temp = self.eval_related_pred(new_x, new_edge_index, edge_mask, label, **kwargs)
+                confidence = temp[0]['evaluation_confidence'].item()
+                if confidence >= e:
+                    related_preds.append(sparsity)
+                    break
+                else:
+                    sparsity -= 0.05
         self.__clear_masks__()
 
-        return self.hard_edge_mask, new_x, new_y, edge_masks, related_preds
+        return self.hard_edge_mask, x, new_edge_index, edge_masks, related_preds
 
 
 

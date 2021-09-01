@@ -13,7 +13,7 @@ from torch_geometric.utils.loop import add_self_loops, remove_self_loops
 from torch_geometric.data import Data, Batch
 from torch_geometric.utils import to_networkx
 from ..models.utils import subgraph
-from rdkit import Chem
+from torch.nn import functional as F
 from matplotlib.axes import Axes
 from matplotlib.patches import Path, PathPatch
 
@@ -44,7 +44,7 @@ class ExplainerBase(nn.Module):
         self.num_edges = None
         self.num_nodes = None
         self.device = None
-        self.table = Chem.GetPeriodicTable().GetElementSymbol
+        self.table = None
 
     def __set_masks__(self, x, edge_index, init="normal"):
 
@@ -129,18 +129,15 @@ class ExplainerBase(nn.Module):
 
         if not self.explain_graph:
             assert self.hard_edge_mask is not None
-            mask_indices = torch.where(self.hard_edge_mask)[0]
-            sub_mask = mask[self.hard_edge_mask]
+            # mask_indices = torch.where(self.hard_edge_mask)[0]
+            sub_mask = mask
             mask_len = sub_mask.shape[0]
-            _, sub_indices = torch.sort(sub_mask, descending=True)
-            split_point = int((1 - sparsity) * mask_len)
-            important_sub_indices = sub_indices[: split_point]
-            important_indices = mask_indices[important_sub_indices]
-            unimportant_sub_indices = sub_indices[split_point:]
-            unimportant_indices = mask_indices[unimportant_sub_indices]
-            trans_mask = mask.clone()
-            trans_mask[:] = - float('inf')
-            trans_mask[important_indices] = float('inf')
+            top_k = int((1 - sparsity) * mask_len)
+            ones = torch.topk(sub_mask, k= top_k, dim=0)
+
+            edge_mask = torch.zeros_like(sub_mask)
+            edge_mask[ones.indices] = 1
+            return edge_mask
         else:
             _, indices = torch.sort(mask, descending=True)
             mask_len = mask.shape[0]
@@ -404,36 +401,26 @@ class ExplainerBase(nn.Module):
 
         return ax, G
 
-    def eval_related_pred(self, x, edge_index, edge_masks, **kwargs):
+    def eval_related_pred(self, x, edge_index, edge_mask, label, **kwargs):
 
-        node_idx = kwargs.get('node_idx')
+        node_idx = self.node_idx
         node_idx = 0 if node_idx is None else node_idx  # graph level: 0, node level: node_idx
         related_preds = []
 
-        for ex_label, edge_mask in enumerate(edge_masks):
 
-            self.edge_mask.data = 1 * torch.ones(edge_mask.size(), device=self.device)
-            ori_pred = self.model(x, edge_index, **kwargs)
+        self.edge_mask.data = torch.ones(edge_mask.size(), device=self.device)
+        ori_pred = F.softmax(self.model(x, edge_index, **kwargs), dim = -1)[node_idx].squeeze()[label]
+        self.edge_mask.data = edge_mask
+        masked_pred = F.softmax(self.model(x, edge_index, **kwargs), dim = -1)[node_idx].squeeze()[label]
 
-            self.edge_mask.data = edge_mask
-            masked_pred = self.model(x,edge_index, **kwargs)
+        confidence = 1 - torch.abs(ori_pred - masked_pred)/ori_pred
 
-            # mask out important elements for fidelity calculation
-            self.edge_mask.data = 1- edge_mask  # keep Parameter's id
-            maskout_pred = self.model(x, edge_index, **kwargs)
 
-            # zero_mask
-            self.edge_mask.data =  torch.zeros(edge_mask.size(), device=self.device)
-            zero_mask_pred = self.model(x, edge_index, **kwargs)
 
-            related_preds.append({'zero': zero_mask_pred[node_idx],
-                                  'masked': masked_pred[node_idx],
-                                  'maskout': maskout_pred[node_idx],
-                                  'origin': ori_pred[node_idx]})
 
-            # Adding proper activation function to the models' outputs.
-            related_preds[ex_label] = {key: pred.softmax(0)[ex_label].item()
-                                    for key, pred in related_preds[ex_label].items()}
+
+        related_preds.append({'evaluation_confidence': confidence})
+
 
         return related_preds
 
@@ -530,51 +517,27 @@ class WalkBase(ExplainerBase):
 
         return walk_indices_list
 
-    def eval_related_pred(self, x, edge_index, masks, **kwargs):
+    def eval_related_pred(self, x, edge_index, mask, label, **kwargs):
 
         node_idx = kwargs.get('node_idx')
         node_idx = 0 if node_idx is None else node_idx # graph level: 0, node level: node_idx
-
+        node_idx = self.node_idx
         related_preds = []
 
-        for label, mask in enumerate(masks):
-            # origin pred
-            # zeros = torch.where(mask < 0)[0].tolist()
-            # nonzeros = torch.where(mask > 0)[0].tolist()
-            # maskout = mask
-            # maskout[zeros] = 1
-            # maskout[nonzeros] = 0
-            # mask[zeros] = 0
-            # mask[nonzeros] = 1
 
 
-            for edge_mask in self.edge_mask:
-                edge_mask.data = torch.ones(mask.size(), device=self.device)
 
-            ori_pred = self.model(x, edge_index, **kwargs)
-            for edge_mask in self.edge_mask:
-                edge_mask.data = mask
-            masked_pred = self.model(x, edge_index, **kwargs)
+        edge_mask = torch.ones(mask.size(), device=self.device)
+        self.__set_masks__(edge_mask)
+        ori_pred = F.softmax(self.model(x, edge_index, **kwargs), dim = -1)[node_idx].squeeze()[label]
+        self.__set_masks__(mask)
+        masked_pred = F.softmax(self.model(x, edge_index, **kwargs), dim = -1)[node_idx].squeeze()[label]
+        self.__clear_masks__()
+        confidence = 1 - torch.abs(ori_pred - masked_pred)/ori_pred
 
-            # mask out important elements for fidelity calculation
-            for edge_mask in self.edge_mask:
-                edge_mask.data = 1-mask
-            maskout_pred = self.model(x, edge_index, **kwargs)
+        related_preds.append({'evaluation_confidence': confidence})
 
-            # zero_mask
-            for edge_mask in self.edge_mask:
-                edge_mask.data = torch.zeros(mask.size(), device=self.device)
-            zero_mask_pred = self.model(x, edge_index, **kwargs)
 
-            # Store related predictions for further evaluation.
-            related_preds.append({'zero': zero_mask_pred[node_idx],
-                                  'masked': masked_pred[node_idx],
-                                  'maskout': maskout_pred[node_idx],
-                                  'origin': ori_pred[node_idx]})
-
-            # Adding proper activation function to the models' outputs.
-            related_preds[label] = {key: pred.softmax(0)[label].item()
-                                    for key, pred in related_preds[label].items()}
 
         return related_preds
 
@@ -604,18 +567,14 @@ class WalkBase(ExplainerBase):
 
         if not self.explain_graph:
             assert self.hard_edge_mask is not None
-            mask_indices = torch.where(self.hard_edge_mask)[0]
-            sub_mask = mask[self.hard_edge_mask]
+            # mask_indices = torch.where(self.hard_edge_mask)[0]
+            sub_mask = mask
             mask_len = sub_mask.shape[0]
-            _, sub_indices = torch.sort(sub_mask, descending=True)
-            split_point = int((1 - sparsity) * mask_len)
-            important_sub_indices = sub_indices[: split_point]
-            important_indices = mask_indices[important_sub_indices]
-            unimportant_sub_indices = sub_indices[split_point:]
-            unimportant_indices = mask_indices[unimportant_sub_indices]
-            trans_mask = mask.clone()
-            trans_mask[:] = - float('inf')
-            trans_mask[important_indices] = float('inf')
+            top_k = int((1 - sparsity) * mask_len)
+            ones = torch.topk(sub_mask, k= top_k, dim=0)
+            edge_mask = torch.zeros_like(sub_mask)
+            edge_mask[ones.indices] = 1
+            return edge_mask
         else:
             _, indices = torch.sort(mask, descending=True)
             mask_len = mask.shape[0]
@@ -627,22 +586,31 @@ class WalkBase(ExplainerBase):
             trans_mask[unimportant_indices] = 0
 
         return trans_mask
-    class connect_mask(object):
-
-        def __init__(self, cls):
-            self.cls = cls
-
-        def __enter__(self):
-
-            self.cls.edge_mask = [nn.Parameter(torch.randn(self.cls.x_batch_size * (self.cls.num_edges + self.cls.num_nodes))) for _ in
-                             range(self.cls.num_layers)] if hasattr(self.cls, 'x_batch_size') else \
-                                 [nn.Parameter(torch.randn(1 * (self.cls.num_edges + self.cls.num_nodes))) for _ in
-                             range(self.cls.num_layers)]
-
-            for idx, module in enumerate(self.cls.mp_layers):
+    def __set_masks__(self, edge_mask):
+        for idx, module in enumerate(self.model.convs):
                 module.__explain__ = True
-                module.__edge_mask__ = self.cls.edge_mask[idx]
+                module.__edge_mask__ = edge_mask
 
-        def __exit__(self, *args):
-            for idx, module in enumerate(self.cls.mp_layers):
-                module.__explain__ = False
+    def __clear_masks__(self):
+        for idx, module in enumerate(self.model.convs):
+            module.__explain__ = False
+            module.__edge_mask__ = None
+    # class connect_mask(object):
+    #
+    #     def __init__(self, cls):
+    #         self.cls = cls
+    #
+    #     def __enter__(self):
+    #
+    #         self.cls.edge_mask = [nn.Parameter(torch.randn(self.cls.x_batch_size * (self.cls.num_edges + self.cls.num_nodes))) for _ in
+    #                          range(self.cls.num_layers)] if hasattr(self.cls, 'x_batch_size') else \
+    #                              [nn.Parameter(torch.randn(1 * (self.cls.num_edges + self.cls.num_nodes))) for _ in
+    #                          range(self.cls.num_layers)]
+    #
+    #         for idx, module in enumerate(self.cls.mp_layers):
+    #             module.__explain__ = True
+    #             module.__edge_mask__ = self.cls.edge_mask[idx]
+    #
+    #     def __exit__(self, *args):
+    #         for idx, module in enumerate(self.cls.mp_layers):
+    #             module.__explain__ = False

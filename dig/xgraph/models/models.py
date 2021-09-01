@@ -31,13 +31,13 @@ class GNNBasic(torch.nn.Module):
     def arguments_read(self, *args, **kwargs):
 
         data: Batch = kwargs.get('data') or None
-
+        batch = None
         if not data:
             if not args:
                 assert 'x' in kwargs
                 assert 'edge_index' in kwargs
                 x, edge_index = kwargs['x'], kwargs['edge_index'],
-                batch = kwargs.get('batch')
+                batch = kwargs.get('batch') or None
                 if batch is None:
                     batch = torch.zeros(kwargs['x'].shape[0], dtype=torch.int64, device=x.device)
             elif len(args) == 2:
@@ -48,7 +48,10 @@ class GNNBasic(torch.nn.Module):
             else:
                 raise ValueError(f"forward's args should take 2 or 3 arguments but got {len(args)}")
         else:
-            x, edge_index, batch = data.x, data.edge_index, data.batch
+            try:
+                x, edge_index, batch = data.x, data.edge_index, data.batch
+            except:
+                x, edge_index = data.x, data.edge_index
 
         return x, edge_index, batch
 
@@ -1282,7 +1285,7 @@ class GAT_mask(nn.Module):
             heads = [1 for _ in range(n_layers)]
         self.convs = nn.ModuleList([GATConv_mask(input_dim, hid_dim, heads = heads[0])]
                                    + [
-                                       GATConv_mask(hid_dim, hid_dim, heads = i + 1)
+                                       GATConv_mask(heads[i]*hid_dim, hid_dim, heads = heads[i + 1])
                                        for i in range(n_layers - 1)
                                    ]
                                    )
@@ -1293,30 +1296,40 @@ class GAT_mask(nn.Module):
         self.bn = nn.BatchNorm1d(hid_dim)
         self.elu = nn.ELU()
 
-    def forward(self, data) -> torch.Tensor:
+    def forward(self, *args, **kwargs) -> torch.Tensor:
         """
         :param Required[data]: Batch - input data
         :return:
         """
-        x, edge_index = data.x, data.edge_index
+
+        if len(args) == 1:
+            x, edge_index = args[0].x, args[0].edge_index
+        else:
+            x, edge_index = args[0], args[1]
         for conv in self.convs:
+            # print(x.shape)
+            # print(conv.lin_l)
             x = conv(x, edge_index)
-            x = self.bn(x)
-            x = self.elu(x)
+            # x = self.bn(x)
+            x = self.relu(x)
             x = self.dropout(x)
         x = self.outlayer(x)
         return x
 
-    def get_emb(self, data) -> torch.Tensor:
-        x, edge_index = data.x, data.edge_index
+    def get_emb(self, *args, **kwargs) -> torch.Tensor:
+
+        if len(args) == 1:
+            x, edge_index = args[0].x, args[0].edge_index
+        else:
+            x, edge_index = args[0], args[1]
         for conv in self.convs:
             x = conv(x, edge_index)
             x = self.relu(x)
             x = self.dropout(x)
         return x
     
-class GCN_mask(nn.Module):
-    def __init__(self, n_layers, input_dim, hid_dim, n_classes, dropout = 0):
+class GCN_mask(GNNBasic):
+    def __init__(self, n_layers, input_dim, hid_dim, n_classes, dropout = 0, model_level = 'node'):
         super(GCN_mask, self).__init__()
         self.convs = nn.ModuleList([GCNConv_mask(input_dim, hid_dim)]
                                    + [
@@ -1332,12 +1345,14 @@ class GCN_mask(nn.Module):
         # self.bn = nn.BatchNorm1d(hid_dim)
         for conv in self.convs:
             conv.chache = None
+        if model_level == 'node':
+            self.readout = IdenticalPool()
+        else:
+            self.readout = GlobalMeanPool()
+
 
     def forward(self, *args, **kwargs):
-        if len(args) == 1:
-            x, edge_index = args[0].x, args[0].edge_index
-        else:
-             x, edge_index = args[0], args[1]
+        x, edge_index, batch = self.arguments_read(*args, **kwargs)
 
         for i,conv in enumerate(self.convs):
             x = conv(x, edge_index)
@@ -1345,8 +1360,11 @@ class GCN_mask(nn.Module):
             x = self.dropout(x)
             # if i != len(self.convs) - 1:
             #     x = self.bn(x)
+        x = self.readout(x, batch)
         x = self.outlayer(x)
         return x
+
+
 
     def get_emb(self,*args):
         if len(args) == 1:

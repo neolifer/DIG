@@ -75,34 +75,20 @@ def subgraph(node_idx, num_hops, edge_index, relabel_nodes=False,
     num_nodes = maybe_num_nodes(edge_index, num_nodes)
 
     assert flow in ['source_to_target', 'target_to_source']
+
     if flow == 'target_to_source':
         row, col = edge_index
     else:
-        col, row = edge_index # edge_index 0 to 1, col: source, row: target
+        col, row = edge_index  # edge_index 0 to 1, col: source, row: target
 
     node_mask = row.new_empty(num_nodes, dtype=torch.bool)
     edge_mask = row.new_empty(row.size(0), dtype=torch.bool)
 
-    if isinstance(node_idx, (int, list, tuple)):
-        node_idx = torch.tensor([node_idx], device=row.device, dtype=torch.int64).flatten()
-    else:
-        node_idx = node_idx.to(row.device)
-
-
     inv = None
 
-    if num_hops != -1:
-        subsets = [node_idx]
-        for _ in range(num_hops):
-            node_mask.fill_(False)
-            node_mask[subsets[-1]] = True
-            torch.index_select(node_mask, 0, row, out=edge_mask)
-            subsets.append(col[edge_mask])
-        subset, inv = torch.cat(subsets).unique(return_inverse=True)
-        inv = inv[:node_idx.numel()]
-    else:
-        subsets = node_idx
-        cur_subsets = node_idx
+    if node_idx is None:
+        subsets = torch.tensor([0])
+        cur_subsets = subsets
         while 1:
             node_mask.fill_(False)
             node_mask[subsets] = True
@@ -113,8 +99,26 @@ def subgraph(node_idx, num_hops, edge_index, relabel_nodes=False,
             else:
                 subset = subsets
                 break
+    else:
+        if isinstance(node_idx, (int, list, tuple)):
+            node_idx = torch.tensor([node_idx], device=row.device, dtype=torch.int64).flatten()
+        elif isinstance(node_idx, torch.Tensor) and len(node_idx.shape) == 0:
+            node_idx = torch.tensor([node_idx])
+        else:
+            node_idx = node_idx.to(row.device)
 
-
+        subsets = [node_idx]
+        if num_hops > 3:
+            num_hops = 3
+        for _ in range(num_hops):
+            node_mask.fill_(False)
+            node_mask[subsets[-1]] = True
+            torch.index_select(node_mask, 0, row, out=edge_mask)
+            subsets.append(col[edge_mask])
+        for i in range(len(subsets)):
+            subsets[i] = subsets[i].to('cuda:0')
+        subset, inv = torch.cat(subsets).unique(return_inverse=True)
+        inv = inv[:node_idx.numel()]
 
     node_mask.fill_(False)
     node_mask[subset] = True
@@ -123,11 +127,11 @@ def subgraph(node_idx, num_hops, edge_index, relabel_nodes=False,
     edge_index = edge_index[:, edge_mask]
 
     if relabel_nodes:
-        node_idx = row.new_full((num_nodes, ), -1)
+        node_idx = row.new_full((num_nodes,), -1)
         node_idx[subset] = torch.arange(subset.size(0), device=row.device)
         edge_index = node_idx[edge_index]
 
-    return subset, edge_index, inv, edge_mask
+    return subset, edge_index, inv, edge_mask  # subset: key new node idx; value original node idx
 
 
 class LagrangianOptimization:
@@ -139,7 +143,7 @@ class LagrangianOptimization:
     batch_size_multiplier = None
     update_counter = 0
 
-    def __init__(self, original_optimizer, device, init_alpha=0.55, min_alpha=-2, max_alpha=30, alpha_optimizer_lr=1e-1, batch_size_multiplier=None):
+    def __init__(self, original_optimizer, device, init_alpha=0.55, min_alpha=-1, max_alpha=30, alpha_optimizer_lr=3e-2, batch_size_multiplier=None):
         self.min_alpha = min_alpha
         self.max_alpha = max_alpha
         self.device = device
@@ -169,10 +173,10 @@ class LagrangianOptimization:
         #     self.original_optimizer.zero_grad()
         #     self.optimizer_alpha.zero_grad()
 
-        loss = f + torch.nn.functional.softplus(self.alpha) * g
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 2)
+        loss = f + torch.nn.functional.softplus(self.alpha, threshold = self.max_alpha) * g
         # print(g.item(), (torch.nn.functional.softplus(self.alpha) * g).item())
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 2)
         # torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
         if self.batch_size_multiplier is not None and self.batch_size_multiplier > 1:
             if self.update_counter % self.batch_size_multiplier == 0:

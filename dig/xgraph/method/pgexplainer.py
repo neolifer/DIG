@@ -19,33 +19,25 @@ import networkx as nx
 from textwrap import wrap
 import matplotlib.pyplot as plt
 from torch_geometric.nn import MessagePassing
-from torch_geometric.utils import to_networkx, add_self_loops
+from torch_geometric.utils import to_networkx, add_self_loops, add_remaining_self_loops
 from torch_geometric.utils.num_nodes import maybe_num_nodes
 from typing import Tuple, List, Dict, Optional
 from .shapley import GnnNets_GC2value_func, GnnNets_NC2value_func, gnn_score
+import pickle as pk
 
 
 EPS = 1e-6
 
-
 class Temp_data(Data):
     def __init__(self, x=None, edge_index=None, edge_attr=None, y=None,
-                 pos=None, normal=None, face=None, node_idx = None, pred = None, emb = None,**kwargs):
+                 pos=None, normal=None, face=None, node_index = None, subset = None, real_pred = None, emb = None, **kwargs):
         super(Temp_data, self).__init__()
         self.x = x
         self.edge_index = edge_index
-        self.node_idx = node_idx
-        self.pred = pred
+        self.node_index = node_index
+        self.subset = subset
+        self.real_pred = real_pred
         self.emb = emb
-    # def __inc__(self, key, value):
-    #     if key == 'node_idx':
-    #         return 1
-    #     elif key == 'pred':
-    #         return self.pred.size(0)
-    #     elif key == 'emb':
-    #         return self.emb.size(0)
-    #     else:
-    #         return super(Temp_data, self).__inc__(key, value)
 
 
 def k_hop_subgraph_with_default_whole_graph(
@@ -117,6 +109,8 @@ def k_hop_subgraph_with_default_whole_graph(
             node_mask[subsets[-1]] = True
             torch.index_select(node_mask, 0, row, out=edge_mask)
             subsets.append(col[edge_mask])
+        for i in range(len(subsets)):
+            subsets[i] = subsets[i].to('cuda:0')
         subset, inv = torch.cat(subsets).unique(return_inverse=True)
         inv = inv[:node_idx.numel()]
 
@@ -291,7 +285,15 @@ class PlotUtils(object):
     def plot_bacom(self, graph, nodelist, y, node_idx, edgelist=None, figname=None):
 
         node_idxs = {k: int(v) for k, v in enumerate(y.reshape(-1).tolist())}
-        node_color = ['#FFA500', '#1B4F72', '#85C1E9', 'green', '#E74C3C', '#D2B4DE','#641E16', '#154360']
+        node_color = ['orange', 'red', 'green', 'blue', 'maroon', 'brown', 'darkslategray', 'paleturquoise']
+        colors = [node_color[v % len(node_color)] for k, v in node_idxs.items()]
+        self.plot_subgraph_with_nodes(graph, nodelist, node_idx, colors, edgelist=edgelist, figname=figname,
+                                      subgraph_edge_color='black')
+
+    def plot_tree(self, graph, nodelist, y, node_idx, edgelist=None, figname=None):
+
+        node_idxs = {k: int(v) for k, v in enumerate(y.reshape(-1).tolist())}
+        node_color = ['orange', 'red']
         colors = [node_color[v % len(node_color)] for k, v in node_idxs.items()]
         self.plot_subgraph_with_nodes(graph, nodelist, node_idx, colors, edgelist=edgelist, figname=figname,
                                       subgraph_edge_color='black')
@@ -300,7 +302,7 @@ class PlotUtils(object):
         if un_directed:
             top_k = 2 * top_k
         edge_mask = edge_mask.reshape(-1)
-        print(edge_mask)
+
         thres_index = max(edge_mask.shape[0] - top_k, 0)
         threshold = float(edge_mask.reshape(-1).sort().values[thres_index])
         hard_edge_mask = (edge_mask >= threshold)
@@ -327,11 +329,17 @@ class PlotUtils(object):
             self.plot_ba2motifs(graph, nodelist, edgelist, figname=figname)
 
 
-        elif self.dataset_name.lower() in ['ba_shapes', 'tree_grid', 'tree_cycle']:
+        elif self.dataset_name.lower() in ['ba_shapes']:
             y = kwargs.get('y')
             node_idx = kwargs.get('node_idx')
             nodelist, edgelist = self.get_topk_edges_subgraph(edge_index, edge_mask, top_k, un_directed)
             self.plot_bashapes(graph, nodelist, y, node_idx, edgelist, figname=figname)
+
+        elif self.dataset_name.lower() in ['tree_grid', 'tree_cycle']:
+            y = kwargs.get('y')
+            node_idx = kwargs.get('node_idx')
+            nodelist, edgelist = self.get_topk_edges_subgraph(edge_index, edge_mask, top_k, un_directed)
+            self.plot_tree(graph, nodelist, y, node_idx, edgelist, figname=figname)
 
         elif self.dataset_name.lower() in ['ba_community']:
             y = kwargs.get('y')
@@ -470,19 +478,19 @@ class PGExplainer(nn.Module):
         # pred_loss = - torch.log(logit)
         prob = F.log_softmax(prob, dim = -1)
 
-        pred_loss = self.loss(prob.unsqueeze(0), ori_pred.unsqueeze(0))
+        pred_loss = self.loss(prob, ori_pred)
         # logit = F.log_softmax(prob, dim = -1)
         # pred_loss = self.loss(logit.unsqueeze(0), ori_pred.unsqueeze(0))
         # size
         edge_mask = self.mask_sigmoid
-        size_loss = self.coff_size * torch.sum(edge_mask)
+        size_loss =  torch.sum(edge_mask)
         scale=0.99
         # entropy
         edge_mask = edge_mask *(2*scale-1.0)+(1.0-scale)
         mask_ent = - edge_mask * torch.log(edge_mask) - (1 - edge_mask) * torch.log(1 - edge_mask)
         mask_ent_loss = self.coff_ent * torch.mean(mask_ent)
 
-        loss = self.coff_pred*pred_loss + size_loss + mask_ent_loss
+        loss = self.coff_pred*pred_loss + self.coff_size *size_loss + mask_ent_loss
         # loss = pred_loss
         return loss, pred_loss, size_loss
 
@@ -534,14 +542,21 @@ class PGExplainer(nn.Module):
 
     def concrete_sample(self, log_alpha: Tensor, beta: float = 1.0, training: bool = True):
         r""" Sample from the instantiation of concrete distribution when training """
+        def clip(x, min_val=0, max_val=1):
+            return x.clamp(min_val, max_val)
         if training:
             random_noise = torch.zeros(log_alpha.shape)
             # random_noise = torch.log(random_noise) - torch.log(1.0 - random_noise)
             gate_inputs = (random_noise.to(log_alpha.device) + log_alpha) / beta
             gate_inputs = gate_inputs.sigmoid()
+
         else:
             gate_inputs = log_alpha.sigmoid()
-
+        # clipped_gate_inputs = clip(gate_inputs)
+        # if True:
+        #     hard_concrete = (clipped_gate_inputs >= 0.5).float()
+        #     clipped_s = clipped_gate_inputs + (hard_concrete - clipped_gate_inputs).detach()
+        #     return clipped_s
         return gate_inputs
 
     def explain(self,
@@ -660,18 +675,31 @@ class PGExplainer(nn.Module):
                 data = dataset
                 data.to(self.device)
                 self.model.eval()
-                # explain_node_index_list = torch.where(data.test_mask == True)[0].tolist()
-                explain_node_index_list = torch.where(data.test_mask == True)[0].tolist()
-                with torch.no_grad():
-                    emb = self.model.get_emb(data.x, data.edge_index)
+                explain_node_index_list = torch.where(data.test_mask)[0]
+                # large_index = pk.load(open('large_subgraph_bacom.pk','rb'))['node_idx']
+                # motif = pk.load(open('Ba_Community_motif.plk','rb'))
+                # explain_node_index_list = list(set(large_index).intersection(set(motif.keys())))
+                # with torch.no_grad():
+                #     emb = self.model.get_emb(data.x, data.edge_index)
+            with torch.no_grad():
+                datalist = []
+                for node_idx in tqdm.tqdm(explain_node_index_list):
+                    x, edge_index, y, subset, _ = \
+                        self.get_subgraph(node_idx=node_idx, x=data.x, edge_index=data.edge_index, y=data.y)
+                    new_node_idx = torch.where(subset == node_idx)[0]
+                    emb = self.model.get_emb(x, edge_index)
+                    real_pred = self.model(x, edge_index).argmax(-1).detach()
+                    datalist.append(Temp_data(x = x.cpu(), edge_index = add_remaining_self_loops(edge_index)[0].cpu(), node_index = torch.LongTensor([new_node_idx]).cpu(),
+                                              subset = subset, real_pred = real_pred, emb = emb.cpu()))
+            loader = DataLoader(datalist, batch_size=1, shuffle= True)
                 # pred_dict = {}
                 # logits = self.model(data.x, data.edge_index)
                 # for node_idx in tqdm.tqdm(explain_node_index_list):
                 #     pred_dict[node_idx] = logits[node_idx].argmax(-1).item()
             # train the mask generator
             duration = 0.0
-            # for epoch in range(self.epochs):
-            for epoch in tqdm.tqdm(range(self.epochs)):
+            for epoch in range(self.epochs):
+            # for epoch in tqdm.tqdm(range(self.epochs)):
                 loss = 0.0
                 optimizer.zero_grad()
                 tmp = 1
@@ -679,20 +707,17 @@ class PGExplainer(nn.Module):
                 tic = time.perf_counter()
                 pred_loss = 0
                 size_loss = 0
-                # for iter_idx, node_idx in tqdm.tqdm(enumerate(explain_node_index_list)):
-                for iter_idx, node_idx in enumerate(explain_node_index_list):
-                    with torch.no_grad():
-                        x, edge_index, y, subset, _ = \
-                            self.get_subgraph(node_idx=node_idx, x=data.x, edge_index=data.edge_index, y=data.y)
-                        # print(edge_index.shape)
-                        # sys.exit()
-                        new_node_index = int(torch.where(subset == node_idx)[0])
-                        # print(y[new_node_index], y[0])
-                        # new_node_index = 0
-                        real_pred = self.model(x, edge_index).argmax(-1).detach()
+                for batch in tqdm.tqdm(loader):
+                    x, edge_index, real_pred, subset, new_node_index, emb= batch.x, batch.edge_index, batch.real_pred, batch.subset, batch.node_index, batch.emb
 
-                    pred, _ = self.explain(x, edge_index, emb[subset], tmp, training=True, node_idx=new_node_index)
+                    x = x.to('cuda:0')
+                    edge_index = edge_index.to('cuda:0')
+                    real_pred = real_pred.to('cuda:0')
+                    new_node_index = new_node_index.to('cuda:0')
+                    emb = emb.to('cuda:0')
+                    pred, _ = self.explain(x, edge_index, emb, tmp, training=True, node_idx=new_node_index)
                     # sys.exit()
+
                     loss_tmp, pred_loss_tmp, size_loss_temp = self.__loss__(pred[new_node_index], real_pred[new_node_index])
                     loss += loss_tmp
                     loss_tmp.backward()
@@ -707,7 +732,7 @@ class PGExplainer(nn.Module):
             # print(f"training time is {duration:.5}s")
 
     def forward(self,
-                data,emb,
+                data,emb,explanation_confidence,x, edge_index, new_node_idx,subset,
                 **kwargs)\
             -> Tuple[None, List, List[Dict]]:
         r""" explain the GNN behavior for graph and calculate the metric values.
@@ -728,10 +753,7 @@ class PGExplainer(nn.Module):
         # set default subgraph with 10 edges
         top_k = kwargs.get('top_k') if kwargs.get('top_k') is not None else 10
 
-        y = data.y.to(self.device)
-        x = data.x.to(self.device)
-        edge_index = data.edge_index.to(self.device)
-        y = y.to(self.device)
+
 
         self.__clear_masks__()
 
@@ -752,45 +774,60 @@ class PGExplainer(nn.Module):
         else:
             node_idx = kwargs.get('node_idx')
             assert kwargs.get('node_idx') is not None, "please input the node_idx"
-            # original value
-            label = y[node_idx]
+
 
             # masked value
-            x, edge_index, y, subset, _ = self.get_subgraph(node_idx=node_idx, x=data.x, edge_index=data.edge_index, y=data.y)
-            new_node_idx = torch.where(subset == node_idx)[0]
+            # x, edge_index, y, subset, _ = self.get_subgraph(node_idx=node_idx, x=data.x, edge_index=data.edge_index, y=data.y)
+            # new_node_idx = torch.where(subset == node_idx)[0]
+            x = x.to(self.device)
+            edge_index = edge_index.to(self.device)
             with torch.no_grad():
                 logits = self.model(x, edge_index)
                 probs = F.softmax(logits, dim=-1)[new_node_idx]
                 probs = probs.squeeze()
-
-
+            label = probs.argmax(-1)
             data1 = Data(x, edge_index)
-
-
+            emb = self.model.get_emb(x, edge_index)
             # print(edge_index.shape)
             # sys.exit()
-            _, edge_mask = self.explain(x, edge_index, emb[subset], 1, training=False, node_idx=new_node_idx)
+            _, edge_mask = self.explain(x, add_remaining_self_loops(edge_index)[0], emb, 1, training=False, node_idx=new_node_idx)
+            sparsity = 1
+            confidence = 0
+            origin = probs[label]
+            while confidence < explanation_confidence:
+                k = int((1- sparsity)*edge_mask.shape[0])
 
-            selected_nodes = calculate_selected_nodes(data1, edge_mask, 6)
-            maskout_nodes_list = [node for node in range(data1.x.shape[0]) if node not in selected_nodes]
-            value_func = GnnNets_NC2value_func(self.model,
-                                               node_idx=new_node_idx,
-                                               target_class=label)
-            maskout_pred = gnn_score(maskout_nodes_list, data1, value_func,
-                                    subgraph_building_method='zero_filling')
-            masked_pred = gnn_score(selected_nodes, data1, value_func,
-                                  subgraph_building_method='zero_filling')
+            # selected_nodes = calculate_selected_nodes(data1, edge_mask, k)
+            # maskout_nodes_list = [node for node in range(data1.x.shape[0]) if node not in selected_nodes]
+            # value_func = GnnNets_NC2value_func(self.model,
+            #                                    node_idx=new_node_idx,
+            #                                    target_class=label)
+                ones = torch.topk(edge_mask, k= k, dim=0)
+                mask = torch.zeros_like(edge_mask)
+                mask[ones.indices] = 1
+                self.__clear_masks__()
+                self.edge_mask = mask
+                self.__set_masks__(x, edge_index, edge_mask)
+                masked_pred = self.model(x, edge_index)
+                masked_pred = F.softmax(masked_pred, dim=-1)[new_node_idx].squeeze()[label]
+                self.__clear_masks__()
+                confidence = 1 - torch.abs(origin - masked_pred)/origin
+                if confidence >= explanation_confidence:
+                    break
+                else:
+                    sparsity -= 0.05
+            # maskout_pred = gnn_score(maskout_nodes_list, data1, value_func,
+            #                         subgraph_building_method='zero_filling')
+            # masked_pred = gnn_score(selected_nodes, data1, value_func,
+            #                       subgraph_building_method='zero_filling')
 
 
-            sparsity_score = 1 - len(selected_nodes) / data1.x.shape[0]
+            # sparsity_score = k/edge_mask.shape[0]
 
         # return variables
         pred_mask = [edge_mask.detach()]
         related_preds = [{
-            'masked': masked_pred,
-            'maskout': maskout_pred,
-            'origin': probs[label],
-            'sparsity': sparsity_score}]
+            'sparsity': sparsity}]
         return None, pred_mask, related_preds
 
     def visualization(self, data: Data, edge_mask: Tensor, top_k: int, plot_utils: PlotUtils,
