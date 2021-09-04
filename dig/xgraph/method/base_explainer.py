@@ -409,9 +409,9 @@ class ExplainerBase(nn.Module):
 
 
         self.edge_mask.data = torch.ones(edge_mask.size(), device=self.device)
-        ori_pred = F.softmax(self.model(x, edge_index, **kwargs), dim = -1)[node_idx].squeeze()[label]
+        ori_pred = F.softmax(self.model(x, edge_index), dim = -1)[node_idx].squeeze()[label]
         self.edge_mask.data = edge_mask
-        masked_pred = F.softmax(self.model(x, edge_index, **kwargs), dim = -1)[node_idx].squeeze()[label]
+        masked_pred = F.softmax(self.model(x, edge_index), dim = -1)[node_idx].squeeze()[label]
 
         confidence = 1 - torch.abs(ori_pred - masked_pred)/ori_pred
 

@@ -33,7 +33,7 @@ parser.add_argument('--model', default='GCN2', dest='gnn models')
 parser.add_argument('--model_name', default='GCN')
 parser.add_argument('--model_level', default='node')
 parser.add_argument('--dim_hidden', default=64)
-parser.add_argument('--alpha', default=0.5)
+parser.add_argument('--alpha', default=0.1)
 parser.add_argument('--theta', default=0.5)
 parser.add_argument('--num_layers', default=2)
 parser.add_argument('--shared_weights', default=False)
@@ -45,7 +45,7 @@ parser.add_argument('--save_epoch', default=10)
 parser.add_argument('--lr', default=0.01)
 parser.add_argument('--wd1', default=1e-3)
 parser.add_argument('--wd2', default=1e-5)
-parser.add_argument('--batch', default=1)
+parser.add_argument('--batch', default=10)
 parser = parser.parse_args()
 
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
@@ -119,7 +119,10 @@ batch = parser.batch
 # model = GCN2_mask(model_level, dim_node, dim_hidden, num_classes, alpha, theta, num_layers,
 #                    shared_weights, dropout)
 model = GCN_mask(num_layers, dim_node, dim_hidden, num_classes)
+# model = GM_GCN2(model_level, dim_node, dim_hidden, num_classes, alpha, theta, num_layers,
+#                 shared_weights)
 ckpt_path = osp.join('checkpoints', 'cora', 'GM_GCN','GM_GCN_best.pth')
+# ckpt_path = osp.join('checkpoints', 'cora', 'GM_GCN2','GCN2_best.pth')
 model.load_state_dict(torch.load(ckpt_path)['net'])
 model.to(device)
 # model = GAT_mask(num_layers, dim_node, 300, num_classes, heads = [7,4,1])
@@ -253,6 +256,7 @@ torch.backends.cudnn.benchmark = True
 
 # tensor(0.1331) [0.34, 1, 1.5, 0.001]
 # tensor(0.1334) [0.3, 2.5, 1, 0.001]
+batch_size = 50
 coff_sizes = [0.03]
 coff_ents = [1]
 coff_preds = [2]
@@ -271,11 +275,11 @@ for coff_size, coff_ent, coff_pred, lr in product(coff_sizes, coff_ents, coff_pr
     random.seed(0)
     np.random.seed(0)
     explainer = PGExplainer(model, lr = lr, in_channels=3*dim_hidden,
-                            device=device, explain_graph=False, num_hops = 2, epochs = 1000,
-                            coff_size= coff_size, coff_ent= coff_ent, coff_pred = coff_pred).cuda()
+                            device=device, explain_graph=False, num_hops = 3, epochs = 1000,
+                            coff_size= coff_size, coff_ent= coff_ent, coff_pred = coff_pred, batch_size = batch_size).cuda()
     # explainer.train_explanation_network(data.cuda(), batch = batch)
     # torch.save(explainer.state_dict(), 'checkpoints/explainer/cora/pgexplainer_gcn_sub_1000epoch.pt')
-    state_dict = torch.load('checkpoints/explainer/cora/pgexplainer_gcn_sub_1000epoch.pt')
+    state_dict = torch.load('checkpoints/explainer/cora/pgexplainer_gcn_1000epoch.pt')
     #
     explainer.load_state_dict(state_dict)
 
@@ -319,36 +323,46 @@ for coff_size, coff_ent, coff_pred, lr in product(coff_sizes, coff_ents, coff_pr
     # --- Set the Sparsity to 0.5
     # large_index = pk.load(open('large_subgraph_bacom.pk','rb'))['node_idx']
     # motif = pk.load(open('Ba_Community_motif.plk','rb'))
-    data = dataset[0]
+    data = dataset[0].to(explainer.device)
     subgraphs = {}
     explain_node_index_list = torch.where(data.test_mask)[0]
     for j, node_idx in tqdm(enumerate(explain_node_index_list), total= len(explain_node_index_list)):
         x, edge_index, y, subset, _ = explainer.get_subgraph(node_idx=node_idx, x=data.x, edge_index=data.edge_index, y=data.y)
-        subgraphs[j] = {'x':x.cpu(), 'edge_index':edge_index.cpu(), 'new_node_idx':torch.where(subset == node_idx)[0].cpu(),
-                        'subset':subset}
+        emb = explainer.model.get_emb(x, edge_index)
+        edge_index = add_remaining_self_loops(edge_index)[0]
+        new_node_idx = torch.where(subset == node_idx)[0]
+        col, row = edge_index
+        f1 = emb[col]
+        f2 = emb[row]
+        self_embed = emb[new_node_idx].repeat(f1.shape[0], 1)
+        f12self = torch.cat([f1, f2, self_embed], dim=-1)
+        subgraphs[j] = {'x':x.cpu(), 'edge_index':edge_index.cpu(), 'new_node_idx':new_node_idx.cpu(),
+                        'subset':subset, 'emb':f12self.cpu()}
 
     data = data.to(device)
     emb = explainer.model.get_emb(data.x, data.edge_index)
-    for explanation_confidence in c:
+    for _ in range(1):
         with torch.no_grad():
             # indices = list(set(large_index).intersection(set(motif.keys())))
-            spars = 0
+            spars = [0 for _ in range(len(c))]
             for j, node_idx in tqdm(enumerate(explain_node_index_list), total = len(explain_node_index_list)):
                 # print(f'explain graph {i} node {node_idx}')
 
                 subgraph = subgraphs[j]
 
                 walks, masks, related_preds= \
-                    explainer(data,emb = emb,explanation_confidence = explanation_confidence, node_idx=node_idx,
+                    explainer(data,emb = subgraph['emb'],explanation_confidence = c, node_idx=node_idx,
                               x = subgraph['x'], edge_index = subgraph['edge_index'], new_node_idx = subgraph['new_node_idx'],
                               subset = subgraph['subset'])
                 # print(related_preds)
                 # sys.exit()
-                spars += related_preds[0]['sparsity']
+                for i in range(len(c)):
+                    spars[i] += related_preds[i]['sparsity']
 
                 # if you only have the edge masks without related_pred, please feed sparsity controlled mask to
                 # obtain the result: x_processor(data, masks, x_collector)
-            sparsity = spars/(j + 1)
+        for i in range(len(c)):
+            sparsity = spars[i]/(j + 1)
             sparsitys.append(sparsity)
             print('hyper parameters:\n'
                   f'coff_size: {coff_size}\n'
@@ -358,7 +372,7 @@ for coff_size, coff_ent, coff_pred, lr in product(coff_sizes, coff_ents, coff_pr
             if sparsity > best_spar:
                 best_spar = sparsity
                 best_parameters = [coff_size, coff_ent, coff_pred, lr]
-            print(f'Explanation_Confidence: {explanation_confidence:.2f}\n'
+            print(f'Explanation_Confidence: {c[i]:.2f}\n'
                   f'Sparsity: {sparsity:.4f}')
 
 print(sparsitys)

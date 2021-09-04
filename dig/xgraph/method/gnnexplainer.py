@@ -151,7 +151,7 @@ class GNNExplainer(ExplainerBase):
         labels = tuple(i for i in range(kwargs.get('num_classes')))
         ex_labels = tuple(torch.tensor([label]).to(self.device) for label in labels)
         self.model.to(x.device)
-        label = F.softmax(self.model(new_x, new_edge_index, **kwargs), dim = -1)[new_node_index].squeeze().argmax(-1)
+        label = F.softmax(self.model(new_x, new_edge_index), dim = -1)[new_node_index].squeeze().argmax(-1)
         # Calculate mask
         edge_masks = []
         for ex_label in ex_labels:

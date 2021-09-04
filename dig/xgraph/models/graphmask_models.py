@@ -469,6 +469,19 @@ class GM_GCN2(nn.Module):
 
         return out
 
+    def get_emb(self,*args):
+        if len(args) == 1:
+            x, edge_index = args[0].x, args[0].edge_index
+        else:
+            x, edge_index = args[0], args[1]
+        x = self.relu(self.fcs[0](x))
+        x_0 = x
+        for i, conv in enumerate(self.convs):
+            if i == 0:
+                continue
+            x = self.relu(conv(x, x_0, edge_index))
+        return x
+
     def get_latest_vertex_embedding(self):
         self.latest_vertex_embeddings = []
         for conv in self.convs:
