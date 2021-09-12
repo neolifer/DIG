@@ -74,7 +74,7 @@ class GM_GCNconv(gnn.GCNConv):
     def __init__(self, *args, **kwargs):
         super(GM_GCNconv, self).__init__(*args, **kwargs)
         self.get_vertex = True
-        self.require_sigmoid = kwargs.get('require_sigmoid') if kwargs.get('require_sigmoid') is not None else False
+        self.require_sigmoid = False
     def forward(self, x, edge_index,
                 edge_weight: OptTensor = None, message_scale: Tensor = None,
                 message_replacement: Tensor = None) -> Tensor:
@@ -160,10 +160,10 @@ class GM_GCNconv(gnn.GCNConv):
             # procedure since this allows us to inject the `edge_mask` into the
             # message passing computation scheme.
             if self.__explain__:
-                if self.require_sigmoid:
-                    edge_mask = self.__edge_mask__.sigmoid()
-                else:
-                    edge_mask = self.__edge_mask__
+            #     if self.require_sigmoid:
+            #         edge_mask = self.__edge_mask__.sigmoid()
+            #     else:
+                edge_mask = self.__edge_mask__
                 # Some ops add self-loops to `edge_index`. We need to do the
                 # same for `edge_mask` (but do not train those).
 
@@ -190,9 +190,9 @@ class GM_GCN(nn.Module):
     def __init__(self, n_layers, input_dim, hid_dim, n_classes, dropout = 0, model_level = 'node', requires_sigmoid = False):
         super(GM_GCN, self).__init__()
         self.require_sigmoid = requires_sigmoid
-        self.convs = nn.ModuleList([GM_GCNconv(input_dim, hid_dim, requires_sigmoid = self.require_sigmoid)]
+        self.convs = nn.ModuleList([GM_GCNconv(input_dim, hid_dim)]
                                    + [
-                                        GM_GCNconv(hid_dim, hid_dim, requires_sigmoid = self.require_sigmoid)
+                                        GM_GCNconv(hid_dim, hid_dim)
                                         for _ in range(n_layers - 1)
                                    ]
                                    )
@@ -204,6 +204,7 @@ class GM_GCN(nn.Module):
         # self.bn = nn.BatchNorm1d(hid_dim)
         for conv in self.convs:
             conv.chache = None
+            conv.require_sigmoid = requires_sigmoid
         if model_level == 'node':
             self.readout = IdenticalPool()
         else:
@@ -241,7 +242,7 @@ class GM_GCN(nn.Module):
             x = self.dropout(x)
             x = conv(x, edge_index)
             x = self.relu(x)
-            x = self.dropout(x)
+
         x = self.readout(x, batch)
         x = self.outlayer(x)
         return x
@@ -254,13 +255,14 @@ class GM_GCN(nn.Module):
         for conv in self.convs:
             x = conv(x, edge_index)
             x = self.relu(x)
+
         return x
     def get_latest_vertex_embedding(self):
-        self.latest_vertex_embeddings = []
+        latest_vertex_embeddings = []
         for conv in self.convs:
-            self.latest_vertex_embeddings.append(conv.get_latest_vertex_embedding())
+            latest_vertex_embeddings.append(conv.get_latest_vertex_embedding())
             conv.latest_vertex_embeddings = None
-        return self.latest_vertex_embeddings
+        return latest_vertex_embeddings
 
     def get_message_dim(self):
         self.message_dims = []
@@ -339,7 +341,9 @@ class GM_GCN2Conv(gnn.GCN2Conv):
                 message = original_message + torch.mul( message_replacement, (1 - message_scale).unsqueeze(-1))
         if self.get_vertex:
             self.latest_vertex_embeddings = torch.cat([x_j, x_i, message], dim = -1) if message_scale is not None else torch.cat([x_j, x_i, original_message], dim = -1)
-        # print(self.latest_vertex_embeddings.shape[0])
+            # self.latest_vertex_embeddings = [x_j, x_i, message] if message_scale is not None else [x_j, x_i, original_message]
+
+    # print(self.latest_vertex_embeddings.shape[0])
         if message_scale is not None:
             return message
         return original_message
@@ -485,6 +489,10 @@ class GM_GCN2(nn.Module):
     def get_latest_vertex_embedding(self):
         self.latest_vertex_embeddings = []
         for conv in self.convs:
+            # temp = conv.get_latest_vertex_embedding()
+            # for i in range(self.latest_vertex_embeddings):
+            #     self.latest_vertex_embeddings[i].append(temp[i])
+            #     conv.latest_vertex_embeddings = None
             self.latest_vertex_embeddings.append(conv.get_latest_vertex_embedding())
             conv.latest_vertex_embeddings = None
         return self.latest_vertex_embeddings

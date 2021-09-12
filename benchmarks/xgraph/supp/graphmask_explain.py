@@ -21,7 +21,7 @@ from matplotlib import pyplot as plt
 import seaborn
 from torch_geometric.datasets import CitationFull, Planetoid
 import torch_geometric.transforms as T
-
+import pickle as pk
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--model', default='GCN2', dest='gnn models')
@@ -30,7 +30,7 @@ parser.add_argument('--model_level', default='node')
 parser.add_argument('--dim_hidden', default=64)
 parser.add_argument('--alpha', default=0.1)
 parser.add_argument('--theta', default=0.5)
-parser.add_argument('--num_layers', default=64)
+parser.add_argument('--num_layers', default=2)
 parser.add_argument('--shared_weights', default=False)
 parser.add_argument('--dropout', default=0.1)
 parser.add_argument('--dataset_dir', default='./datasets/')
@@ -50,32 +50,6 @@ import numpy as np
 np.random.seed(0)
 
 
-
-def index_to_mask(index, size):
-    mask = torch.zeros(size, dtype=torch.bool, device=index.device)
-    mask[index] = 1
-    return mask
-
-# def split_dataset(dataset, num_classes):
-#     indices = []
-#     train_percent = 0.7
-#     for i in range(num_classes):
-#         index = (dataset.data.y == i).nonzero().view(-1)
-#         index = index[torch.randperm(index.size(0))]
-#         indices.append(index)
-#
-#     train_index = torch.cat([i[:int(len(i) * train_percent)] for i in indices], dim=0)
-#
-#     rest_index = torch.cat([i[int(len(i) * train_percent):] for i in indices], dim=0)
-#     rest_index = rest_index[torch.randperm(rest_index.size(0))]
-#
-#     dataset.data.train_mask = index_to_mask(train_index, size=dataset.data.num_nodes)
-#     dataset.data.val_mask = index_to_mask(rest_index[:len(rest_index) // 2], size=dataset.data.num_nodes)
-#     dataset.data.test_mask = index_to_mask(rest_index[len(rest_index) // 2:], size=dataset.data.num_nodes)
-#
-#     dataset.data, dataset.slices = dataset.collate([dataset.data])
-#
-#     return dataset
 if parser.dataset_name != 'Cora':
     dataset = get_dataset(parser)
 else:
@@ -91,19 +65,10 @@ dim_edge = dataset.num_edge_features
 # num_targets = dataset.num_classes
 num_classes = dataset.num_classes
 
-# splitted_dataset = split_dataset(dataset, num_classes)
-# splitted_dataset.data.mask = splitted_dataset.data.test_mask
-# splitted_dataset.slices['mask'] = splitted_dataset.slices['train_mask']
-dataloader = DataLoader(dataset, batch_size=1, shuffle=False)
 
 
-def check_checkpoints(root='./'):
-    if osp.exists(osp.join(root, 'checkpoints')):
-        return
-    url = ('https://github.com/divelab/DIG_storage/raw/main/xgraph/checkpoints.zip')
-    path = download_url(url, root)
-    extract_zip(path, root)
-    os.unlink(path)
+
+
 model_level = parser.model_level
 
 dim_hidden = parser.dim_hidden
@@ -123,15 +88,16 @@ dropout=parser.dropout
 # ckpt_path = osp.join('checkpoints', 'ba_community', 'GAT','GAT_100_best.pth')
 # model.load_state_dict(torch.load(ckpt_path)['net'])
 
-# model = GM_GCN(n_layers = num_layers, input_dim = dim_node, hid_dim = dim_hidden, n_classes = num_classes)
-model = GM_GCN2(model_level, dim_node, dim_hidden, num_classes, alpha, theta, num_layers,
-                shared_weights)
+model = GM_GCN(n_layers = num_layers, input_dim = dim_node, hid_dim = dim_hidden, n_classes = num_classes)
+# model = GM_GCN2(model_level, dim_node, dim_hidden, num_classes, alpha, theta, num_layers,
+#                 shared_weights)
 model.to(device)
 # ckpt_path = osp.join('checkpoints', 'ba_community', 'GM_GCN','GM_GCN_100_best.pth')
 # model.load_state_dict(torch.load(ckpt_path)['net'])
 
-ckpt_path = osp.join('checkpoints', 'cora', 'GM_GCN2','GCN2_best.pth')
+ckpt_path = osp.join('checkpoints', 'cora', 'GM_GCN','GM_GCN_nopre_best.pth')
 model.load_state_dict(torch.load(ckpt_path)['net'])
+
 
 
 
@@ -153,22 +119,28 @@ from dig.xgraph.method import GraphMaskExplainer, GraphMaskAdjMatProbe
 message_dims = [dim_hidden for _ in range(num_layers)]
 hidden_dims = [dim_hidden for _ in range(num_layers)]
 vertex_dims = [3*dim_hidden]+[3*dim_hidden for _ in range(num_layers - 1)]
-GraphMask = GraphMaskAdjMatProbe(vertex_dims, message_dims, num_classes, hidden_dims )
+GraphMask = GraphMaskAdjMatProbe(vertex_dims, message_dims, num_classes, vertex_dims)
 model.cuda()
 GraphMask.cuda()
 allowance =  0.2
 pentalty_scalings = [5e-1]
+# pentalty_scalings = [10]
 entropy_scales = [1]
-allowances = [0.1]
+allowances = [0.03]
 lr1s = [3e-2]
 lr2s = [1e-3]
 best_parameters = None
 best_spar = 1
+data = dataset.data
+# large_index = pk.load(open('large_subgraph_bacom.pk','rb'))['node_idx']
+# motif = pk.load(open('Ba_Community_motif.plk','rb'))
+# explain_node_index_list = list(set(large_index).intersection(set(motif.keys())))
+explain_node_index_list = torch.where(data.test_mask)[0]
 # for pentalty_scaling, entropy_scale, allowance,lr1, lr2 in tqdm.tqdm(product(pentalty_scalings, entropy_scales,allowances, lr1s, lr2s),
 #                                                                      total = len(list(product(pentalty_scalings, entropy_scales,allowances, lr1s, lr2s)))):
 for pentalty_scaling, entropy_scale, allowance,lr1, lr2 in product(pentalty_scalings, entropy_scales,allowances, lr1s, lr2s):
-    explainer = GraphMaskExplainer(model, GraphMask, epoch = 1, penalty_scaling = pentalty_scaling,
-                                   entropy_scale = entropy_scale,allowance = allowance, lr1 =lr1, lr2= lr2, batch_size = 50)
+    explainer = GraphMaskExplainer(model, GraphMask, epoch = 500, penalty_scaling = pentalty_scaling,
+                                   entropy_scale = entropy_scale,allowance = allowance, lr1 =lr1, lr2= lr2, batch_size = len(explain_node_index_list))
 
     import random
     import numpy as np
@@ -178,17 +150,18 @@ for pentalty_scaling, entropy_scale, allowance,lr1, lr2 in product(pentalty_scal
 
     # state_dict = torch.load('gm_gcn100_bacom.pt')
     # GraphMask.load_state_dict(state_dict)
-    explainer.train_graphmask(dataset)
+    # explainer.train_graphmask(dataset)
     # probs, sizes = explainer.train_graphmask(dataset)
     # outputs = {'prob':np.array(probs), 'graph_size':np.array(sizes)}
     # seaborn.scatterplot(y = 'prob', x = 'graph_size', data = outputs)
     # seaborn.histplot(x = 'graph_size', data=outputs)
     # plt.show()
     # sys.exit()
-    torch.save(GraphMask.state_dict(), 'checkpoints/explainer/cora/gm_gcn2_free_nobase.pt')
+    # torch.save(GraphMask.state_dict(), 'checkpoints/explainer/cora/gm_gcn_free_confirm_003_nopre.pt')
     #
-    # state_dict = torch.load('checkpoints/explainer/cora/gm_gcn_free.pt')
-    # GraphMask.load_state_dict(state_dict)
+    state_dict = torch.load('checkpoints/explainer/cora/gm_gcn_constrained_confirm_003_nopre.pt')
+    # state_dict = torch.load('gm_gcn100_bacom_free.pt')
+    GraphMask.load_state_dict(state_dict)
     # sys.exit()
 
     #
@@ -215,9 +188,6 @@ for pentalty_scaling, entropy_scale, allowance,lr1, lr2 in product(pentalty_scal
     # visualize(new_data, edge_mask=mask, top_k=6, plot_utils=plotutils, node_idx= new_node_idx, vis_name = f'fig/graphmask_gat{node_idx}.pdf',dist_dict = dist_dict)
     # sys.exit()
 
-    # --- Create data collector and explanation processor ---
-    from dig.xgraph.evaluation import XCollector
-    x_collector = XCollector()
 
     ## Run explainer on the given model and dataset
     a = 0.50
@@ -233,54 +203,40 @@ for pentalty_scaling, entropy_scale, allowance,lr1, lr2 in product(pentalty_scal
     inv_fidelity2 = []
     in_motifs = []
     sparsitys = []
-    data = dataset[0]
+
     subgraphs = {}
-    explain_node_index_list = torch.where(data.test_mask)[0]
+
+    # explain_node_index_list = torch.where(data.test_mask)[0][:1]
     for j, node_idx in tqdm.tqdm(enumerate(explain_node_index_list), total= len(explain_node_index_list)):
         x, edge_index, y, subset, _ = explainer.get_subgraph(node_idx, data.x, data.edge_index,data.y)
-        subgraphs[j] = {'x':x.cpu(), 'edge_index':edge_index.cpu(), 'new_node_idx':torch.where(subset == node_idx)[0].cpu()}
+        subgraphs[j] = {'x':x.cpu(), 'edge_index':edge_index.cpu(), 'new_node_idx':torch.where(subset == node_idx)[0].cpu(), 'y':y}
     import pickle as pk
-    for explanation_confidence in c:
+    data = None
+    for _ in range(1):
+        spars = [0 for _ in range(len(c))]
 
-        # large_index = pk.load(open('large_subgraph_bacom.pk','rb'))['node_idx']
-        # motif = pk.load(open('Ba_Community_motif.plk','rb'))
-        # explain_node_index_list = list(set(large_index).intersection(set(motif.keys())))
-
-        spars = 0
         for j, node_idx in tqdm.tqdm(enumerate(explain_node_index_list), total= len(explain_node_index_list)):
         # for j, node_idx in enumerate(explain_node_index_list):
-            data = data.to(device)
+
             subgraph = subgraphs[j]
             # if torch.isnan(data.y[0].squeeze()):
             #     continue
             with torch.no_grad():
-                _, masks, related_preds = \
-                    explainer(data, explanation_confidence = explanation_confidence, node_idx=node_idx, y=data.y,
-                              x = subgraph['x'], edge_index = subgraph['edge_index'], new_node_idx = subgraph['new_node_idx'])
-            spars += related_preds[0]['sparsity']
+                related_preds = \
+                    explainer(explanation_confidence = c, node_idx=node_idx,
+                              x = subgraph['x'], edge_index = subgraph['edge_index'], new_node_idx = subgraph['new_node_idx'], y = subgraph['y'])
+            for i in range(len(c)):
+                spars[i] += related_preds[i]['sparsity']
 
-        # outputs = {'inv_fidelity': invs, 'sparsity': spars}
-        # seaborn.scatterplot(y = 'inv_fidelity', x = 'sparsity', data = outputs)
-        # plt.show()
-        # outputs = {'graph_size': sizes, 'sparsity': spars}
-        # seaborn.scatterplot(y = 'sparsity', x = 'graph_size', data = outputs)
-        # plt.show()
-        # sys.exit()
-            # if you only have the edge masks without related_pred, please feed sparsity controlled mask to
-            # obtain the result: x_processor(data, masks, x_collector)
-        #     if index >= 99:
-        #         break
-        #
-        # if index >= 99:
-        #     break
-        sparsity = spars/(j + 1)
-        sparsitys.append(sparsity)
-        if sparsity < best_spar:
-            best_parameters = [pentalty_scaling, entropy_scale, allowance,lr1, lr2]
-            best_spar = sparsity
-        print(f'parameters:{[pentalty_scaling, entropy_scale, allowance,lr1, lr2]}\n'
-              f'explanation_confidence: {explanation_confidence:.2f}\n'
-              f'Sparsity: {sparsity:.4f}')
+        for i in range(len(c)):
+            sparsity = spars[i]/(j + 1)
+            sparsitys.append(sparsity)
+            if sparsity < best_spar:
+                best_parameters = [pentalty_scaling, entropy_scale, allowance,lr1, lr2]
+                best_spar = sparsity
+            # print(f'parameters:{[pentalty_scaling, entropy_scale, allowance,lr1, lr2]}\n'
+            #       f'explanation_confidence: {c[i]:.2f}\n'
+            #       f'Sparsity: {sparsity:.4f}')
     print('evaluation_confidence: ',c)
     print('sparsity: ', sparsitys)
 print('best parameters: ', best_parameters,

@@ -30,7 +30,7 @@ EPS = 1e-6
 
 class Temp_data(Data):
     def __init__(self, x=None, edge_index=None, edge_attr=None, y=None,
-                 pos=None, normal=None, face=None, node_index = None, subset = None, real_pred = None, emb = None, **kwargs):
+                 pos=None, normal=None, face=None, node_index = None, subset = None, real_pred = None, emb = None, node_size = None, **kwargs):
         super(Temp_data, self).__init__()
         self.x = x
         self.edge_index = edge_index
@@ -38,7 +38,7 @@ class Temp_data(Data):
         self.subset = subset
         self.real_pred = real_pred
         self.emb = emb
-
+        self.node_size = node_size
 
 def k_hop_subgraph_with_default_whole_graph(
         edge_index, node_idx=None, num_hops=5, relabel_nodes=False,
@@ -397,7 +397,7 @@ class PGExplainer(nn.Module):
         self.coff_pred = coff_pred
         self.t0 = t0
         self.t1 = t1
-        self.loss = nn.NLLLoss()
+        self.loss = nn.NLLLoss(reduction='sum')
         self.num_hops = self.update_num_hops(num_hops)
         self.init_bias = 0.0
         self.batch_size = batch_size
@@ -441,11 +441,11 @@ class PGExplainer(nn.Module):
         # else:
         #     self.edge_mask = edge_mask
 
-        self.edge_mask.to(self.device)
+
         for module in self.model.modules():
             if isinstance(module, MessagePassing):
                 module.__explain__ = True
-                module.__edge_mask__ = self.edge_mask
+                module.__edge_mask__ = edge_mask
 
     def __clear_masks__(self):
         """ clear the edge weights to None, and set the explain flag to :obj:`False` """
@@ -454,7 +454,7 @@ class PGExplainer(nn.Module):
                 module.__explain__ = False
                 module.__edge_mask__ = None
         self.node_feat_masks = None
-        self.edge_mask = None
+
 
     def update_num_hops(self, num_hops: int):
         if num_hops is not None:
@@ -483,6 +483,7 @@ class PGExplainer(nn.Module):
         # pred_loss = self.loss(logit.unsqueeze(0), ori_pred.unsqueeze(0))
         # size
         edge_mask = self.mask_sigmoid
+        self.mask_sigmoid = None
         size_loss =  torch.sum(edge_mask)
         scale=0.99
         # entropy
@@ -491,6 +492,7 @@ class PGExplainer(nn.Module):
         mask_ent_loss = self.coff_ent * torch.mean(mask_ent)
 
         loss = self.coff_pred*pred_loss + self.coff_size *size_loss + mask_ent_loss
+
         # loss = pred_loss
         return loss, pred_loss, size_loss
 
@@ -564,7 +566,7 @@ class PGExplainer(nn.Module):
                 edge_index: Tensor,
                 embed: Tensor,
                 tmp: float = 1.0,
-                training: bool = False,
+                training: bool = False, node_size = None, feature_dim = None,
                 **kwargs) \
             -> Tuple[float, Tensor]:
         r""" explain the GNN behavior for graph with explanation network
@@ -580,9 +582,8 @@ class PGExplainer(nn.Module):
             probs (:obj:`torch.Tensor`): The classification probability for graph with edge mask
             edge_mask (:obj:`torch.Tensor`): The probability mask for graph edges
         """
-        node_idx = kwargs.get('node_idx')
-        nodesize = x.shape[0]
-        feature_dim = x.shape[1]
+
+
 
         # if self.explain_graph:
         #     col, row = edge_index
@@ -607,7 +608,7 @@ class PGExplainer(nn.Module):
         values = self.concrete_sample(values, beta=tmp, training=training)
 
         mask_sparse = torch.sparse_coo_tensor(
-            edge_index, values, (nodesize, nodesize)
+            edge_index, values, (node_size, node_size)
         )
 
         self.mask_sigmoid = mask_sparse.to_dense()
@@ -619,7 +620,7 @@ class PGExplainer(nn.Module):
         # inverse the weights before sigmoid in MessagePassing Module
         # edge_mask = inv_sigmoid(edge_mask)
         self.__clear_masks__()
-        self.edge_mask = edge_mask
+
         self.__set_masks__(x, edge_index, edge_mask)
 
         # the model prediction with edge mask
@@ -687,16 +688,18 @@ class PGExplainer(nn.Module):
                     x, edge_index, y, subset, _ = \
                         self.get_subgraph(node_idx=node_idx, x=data.x, edge_index=data.edge_index, y=data.y)
                     new_node_idx = torch.where(subset == node_idx)[0]
-                    emb = self.model.get_emb(x, edge_index)
                     edge_index = add_remaining_self_loops(edge_index)[0]
+                    emb = self.model.get_emb(x, edge_index)
                     col, row = edge_index
                     f1 = emb[col]
                     f2 = emb[row]
                     self_embed = emb[new_node_idx].repeat(f1.shape[0], 1)
-                    f12self = torch.cat([f1, f2, self_embed], dim=-1)
+                    f12self = torch.cat([f1, f2, self_embed], dim=-1).detach()
                     real_pred = self.model(x, edge_index).argmax(-1).detach()
                     datalist.append(Temp_data(x = x.cpu(), edge_index = edge_index.cpu(), node_index = torch.LongTensor([new_node_idx]).cpu(),
-                                              subset = subset, real_pred = real_pred, emb = f12self.cpu()))
+                                              subset = subset.cpu(), real_pred = real_pred.cpu(), emb = f12self.cpu()))
+
+
             data = None
             loader = DataLoader(datalist, batch_size= self.batch_size, shuffle= True)
                 # pred_dict = {}
@@ -704,44 +707,56 @@ class PGExplainer(nn.Module):
                 # for node_idx in tqdm.tqdm(explain_node_index_list):
                 #     pred_dict[node_idx] = logits[node_idx].argmax(-1).item()
             # train the mask generator
-            duration = 0.0
+            self.elayers.train()
             for epoch in range(self.epochs):
             # for epoch in tqdm.tqdm(range(self.epochs)):
-                loss = 0.0
+                torch.cuda.empty_cache()
                 optimizer.zero_grad()
                 tmp = 1
-                self.elayers.train()
-                tic = time.perf_counter()
+
+
                 pred_loss = 0
                 size_loss = 0
                 # self.model.set_get_vertex(False)
                 for batch in tqdm.tqdm(loader):
-                    x, edge_index, real_pred, subset, new_node_index, emb= batch.x, batch.edge_index, batch.real_pred, batch.subset, batch.node_index, batch.emb
+                    torch.cuda.empty_cache()
+                    x, edge_index, real_pred,new_node_index, emb= batch.x, batch.edge_index, \
+                                                                  batch.real_pred, batch.node_index, batch.emb
 
                     x = x.to('cuda:0')
                     edge_index = edge_index.to('cuda:0')
                     real_pred = real_pred.to('cuda:0')
                     new_node_index = new_node_index.to('cuda:0')
                     emb = emb.to('cuda:0')
+                    node_size = emb.shape[0]
+                    feature_dim = emb.shape[1]
                     # pred, _ = self.explain(x, edge_index, emb, tmp, training=True, node_idx=new_node_index)
-                    pred, _ = self.explain(x, edge_index, emb, tmp, training=True, node_idx=new_node_index)
+                    pred, _ = self.explain(x, edge_index, emb, tmp, training=True, node_idx=new_node_index, node_size = node_size, feature_dim = feature_dim)
                     # sys.exit()
 
                     loss_tmp, pred_loss_tmp, size_loss_temp = self.__loss__(pred[new_node_index], real_pred[new_node_index])
-                    loss += loss_tmp
-                    loss_tmp.backward()
+
+
                     # print(pred_loss_tmp.detach().item())
                     size_loss += size_loss_temp.detach().item()
-                    pred_loss += pred_loss_tmp.detach().item()
-
-                torch.nn.utils.clip_grad_value_(self.elayers.parameters(), 2)
+                    pred_loss += pred_loss_tmp.detach().sum().item()
+                    pred_loss_tmp = None
+                    size_loss_temp = None
+                    torch.cuda.empty_cache()
+                    loss_tmp.backward()
+                    torch.nn.utils.clip_grad_value_(self.elayers.parameters(), 2)
+                torch.cuda.empty_cache()
                 optimizer.step()
-                duration += time.perf_counter() - tic
-                print(f'Epoch: {epoch} | pred Loss: {pred_loss/len(explain_node_index_list)}| size loss :{size_loss/(len(explain_node_index_list)/self.batch_size)}')
+                optimizer.zero_grad()
+                torch.cuda.empty_cache()
+
+
+                print(f'Epoch: {epoch} | pred Loss: {pred_loss/len(explain_node_index_list)}| size loss :{size_loss/(len(explain_node_index_list))}')
+
             # print(f"training time is {duration:.5}s")
 
     def forward(self,
-                data,emb,explanation_confidence,x, edge_index, new_node_idx,subset,
+                emb,explanation_confidence,x, edge_index, new_node_idx,subset,node_size, feature_dim,
                 **kwargs)\
             -> Tuple[None, List, List[Dict]]:
         r""" explain the GNN behavior for graph and calculate the metric values.
@@ -790,21 +805,27 @@ class PGExplainer(nn.Module):
             # new_node_idx = torch.where(subset == node_idx)[0]
             x = x.to(self.device)
             edge_index = edge_index.to(self.device)
+            emb = emb.to(self.device)
+
+            edge_index = add_remaining_self_loops(edge_index)[0]
             with torch.no_grad():
                 logits = self.model(x, edge_index)
                 probs = F.softmax(logits, dim=-1)[new_node_idx]
                 probs = probs.squeeze()
             label = probs.argmax(-1)
-            data1 = Data(x, edge_index)
+
             # emb = self.model.get_emb(x, edge_index)
             # print(edge_index.shape)
             # sys.exit()
-            _, edge_mask = self.explain(x, add_remaining_self_loops(edge_index)[0], emb, 1, training=False, node_idx=new_node_idx)
-            sparsity = 1
+            _, edge_mask = self.explain(x, edge_index, emb, 1, training=False, node_idx=new_node_idx, node_size = node_size, feature_dim = feature_dim)
             related_preds = []
+            confidence = 0
+            sparsity = 1
+            origin = probs[label]
             for i in range(len(explanation_confidence)):
-                confidence = 0
-                origin = probs[label]
+                if confidence >= explanation_confidence[i]:
+                    related_preds.append({'sparsity': sparsity})
+                    continue
                 while confidence < explanation_confidence[i]:
                     k = int((1- sparsity)*edge_mask.shape[0])
 
@@ -813,12 +834,12 @@ class PGExplainer(nn.Module):
                 # value_func = GnnNets_NC2value_func(self.model,
                 #                                    node_idx=new_node_idx,
                 #                                    target_class=label)
+
                     ones = torch.topk(edge_mask, k= k, dim=0)
                     mask = torch.zeros_like(edge_mask)
                     mask[ones.indices] = 1
                     self.__clear_masks__()
-                    self.edge_mask = mask
-                    self.__set_masks__(x, edge_index, edge_mask)
+                    self.__set_masks__(x, edge_index, mask)
                     masked_pred = self.model(x, edge_index)
                     masked_pred = F.softmax(masked_pred, dim=-1)[new_node_idx].squeeze()[label]
                     self.__clear_masks__()
@@ -827,7 +848,9 @@ class PGExplainer(nn.Module):
                         related_preds.append({'sparsity': sparsity})
                         break
                     else:
-                        sparsity -= 0.05
+                        sparsity -= 0.01
+                        if sparsity < 0:
+                            sparsity = 0
             # maskout_pred = gnn_score(maskout_nodes_list, data1, value_func,
             #                         subgraph_building_method='zero_filling')
             # masked_pred = gnn_score(selected_nodes, data1, value_func,

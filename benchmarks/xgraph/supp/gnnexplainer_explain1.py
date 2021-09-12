@@ -36,7 +36,7 @@ parser.add_argument('--model_level', default='node')
 parser.add_argument('--dim_hidden', default=64)
 parser.add_argument('--alpha', default=0.5)
 parser.add_argument('--theta', default=0.5)
-parser.add_argument('--num_layers', default=64)
+parser.add_argument('--num_layers', default=2)
 parser.add_argument('--shared_weights', default=False)
 parser.add_argument('--dropout', default=0.1)
 parser.add_argument('--dataset_dir', default='./datasets/')
@@ -92,10 +92,7 @@ dim_edge = dataset.num_edge_features
 # num_targets = dataset.num_classes
 num_classes = dataset.num_classes
 
-splitted_dataset = split_dataset(dataset)
-splitted_dataset.data.mask = splitted_dataset.data.test_mask
-splitted_dataset.slices['mask'] = splitted_dataset.slices['test_mask']
-dataloader = DataLoader(splitted_dataset, batch_size=1, shuffle=False)
+
 
 def check_checkpoints(root='./'):
     if osp.exists(osp.join(root, 'checkpoints')):
@@ -129,18 +126,18 @@ dropout=parser.dropout
 # ckpt_path = osp.join('checkpoints', 'ba_shapes', 'GCN2','GCN2_best.pth')
 # ckpt_path = osp.join('checkpoints', 'ba_shapes', 'GCN_2l','GCN_2l_best.pth')
 # ckpt_path = osp.join('checkpoints', 'ba_community', 'GM_GCN','GM_GCN_100_best.pth')
-model = GM_GCN2(model_level, dim_node, dim_hidden, num_classes, alpha, theta, num_layers,
-                shared_weights)
-ckpt_path = osp.join('checkpoints', 'cora', 'GM_GCN2','GCN2_best.pth')
-# model = GM_GCN(num_layers, dim_node, dim_hidden, num_classes)
+# model = GM_GCN2(model_level, dim_node, dim_hidden, num_classes, alpha, theta, num_layers,
+#                 shared_weights)
+# ckpt_path = osp.join('checkpoints', 'cora', 'GM_GCN2','GCN2_best.pth')
+model = GM_GCN(num_layers, dim_node, dim_hidden, num_classes)
 # ckpt_path = osp.join('checkpoints', 'ba_community', 'GM_GCN','GM_GCN_100_best.pth')
-# ckpt_path = osp.join('checkpoints', 'cora', 'GM_GCN','GM_GCN_best.pth')
+ckpt_path = osp.join('checkpoints', 'cora', 'GM_GCN','GM_GCN_nopre_best.pth')
 model.load_state_dict(torch.load(ckpt_path)['net'])
 from dig.xgraph.method import GNNExplainer
 # explainer = GNNExplainer(model, epochs=100, lr=0.01, explain_graph=False)
-explainer = GNNExplainer(model, epochs=100, lr=0.01, explain_graph=False)
+explainer = GNNExplainer(model, epochs=1000, lr=0.01, explain_graph=False)
 explainer.model.set_get_vertex(False)
-edge_index = dataset[0].edge_index
+# edge_index = dataset[0].edge_index
 # dist_dict = {}
 # for i, (u, v) in enumerate(edge_index.t().tolist()):
 #     if u == 0 and v != 0:
@@ -200,9 +197,9 @@ sparsitys = []
 
 
 
-for index, data in enumerate(dataloader):
+for _ in range(1):
     # node_indices = list(set(large_index).intersection(set(motif.keys())))
-    data = dataset[0]
+    data = dataset.data
     # node_indices = list(set(large_index).intersection(set(motif.keys())))
     # node_indices = list(motif.keys())
     node_indices = torch.where(data.test_mask)[0]

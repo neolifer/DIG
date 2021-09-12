@@ -143,7 +143,7 @@ class LagrangianOptimization:
     batch_size_multiplier = None
     update_counter = 0
 
-    def __init__(self, original_optimizer, device, init_alpha=0.55, min_alpha=-1, max_alpha=30, alpha_optimizer_lr=3e-2, batch_size_multiplier=None):
+    def __init__(self, original_optimizer, device, init_alpha=0.55, min_alpha=-1, max_alpha=30, alpha_optimizer_lr=3e-2, batch_size_multiplier= None):
         self.min_alpha = min_alpha
         self.max_alpha = max_alpha
         self.device = device
@@ -163,27 +163,30 @@ class LagrangianOptimization:
         :return:
         """
 
-        # if self.batch_size_multiplier is not None and self.batch_size_multiplier > 1:
-        #     if self.update_counter % self.batch_size_multiplier == 0:
-        #         self.original_optimizer.zero_grad()
-        #         self.optimizer_alpha.zero_grad()
-        #
-        #     self.update_counter += 1
-        # else:
-        #     self.original_optimizer.zero_grad()
-        #     self.optimizer_alpha.zero_grad()
+        if self.batch_size_multiplier is not None and self.batch_size_multiplier > 1:
+            if self.update_counter % self.batch_size_multiplier == 0:
+                self.original_optimizer.zero_grad()
+                self.optimizer_alpha.zero_grad()
+
+            self.update_counter += 1
+        else:
+            self.original_optimizer.zero_grad()
+            self.optimizer_alpha.zero_grad()
 
         loss = f + torch.nn.functional.softplus(self.alpha, threshold = self.max_alpha) * g
         # print(g.item(), (torch.nn.functional.softplus(self.alpha) * g).item())
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 2)
+        # torch.nn.utils.clip_grad_norm_(model.parameters(), 2)
         # torch.nn.utils.clip_grad_norm_(model.parameters(), 1)
         if self.batch_size_multiplier is not None and self.batch_size_multiplier > 1:
             if self.update_counter % self.batch_size_multiplier == 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 2)
+                torch.nn.utils.clip_grad_norm_([self.alpha], 2)
                 self.original_optimizer.step()
                 self.alpha.grad *= -1
                 self.optimizer_alpha.step()
         else:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 2)
             self.original_optimizer.step()
             self.alpha.grad *= -1
             self.optimizer_alpha.step()

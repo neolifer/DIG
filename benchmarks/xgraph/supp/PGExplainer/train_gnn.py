@@ -24,7 +24,7 @@ def train_NC(parser,  lr ,head, dropout, wd2, hid_dim):
     if parser.dataset_name != 'Cora':
         dataset = get_dataset(parser)
     else:
-        dataset = Planetoid('../datasets', 'Cora',split="public", transform = T.NormalizeFeatures())
+        dataset = Planetoid('../datasets', 'Cora',split="public")
     dataset.data.x = dataset.data.x.to(torch.float32)
     # dataset.data.x = dataset.data.x[:, :1]
     input_dim = dataset.num_node_features
@@ -49,25 +49,25 @@ def train_NC(parser,  lr ,head, dropout, wd2, hid_dim):
     wd1 = parser.wd1
 
 
-    data = dataset[0]
+    data = dataset.data
 
-    gnnNets_NC = GM_GCN2(model_level, dim_node, dim_hidden, num_classes, alpha, theta, num_layers,
-                                  shared_weights, dropout)
-    for conv in gnnNets_NC.convs:
-        conv.get_vertex = False
+    # gnnNets_NC = GM_GCN2(model_level, dim_node, dim_hidden, num_classes, alpha, theta, num_layers,
+    #                               shared_weights, dropout)
+    # for conv in gnnNets_NC.convs:
+    #     conv.get_vertex = True
     # gnnNets_NC = GCN_2l(model_level, dim_node, dim_hidden, num_classes)
-    # gnnNets_NC = GM_GCN(num_layers, dim_node, hid_dim, num_classes)
+    gnnNets_NC = GM_GCN(num_layers, dim_node, hid_dim, num_classes, dropout)
     # gnnNets_NC = GAT(num_layers, dim_node, hid_dim, num_classes, dropout, heads = head)
     # gnnNets_NC = GraphSAGE(num_layers, dim_node, dim_hidden, num_classes)
     gnnNets_NC = gnnNets_NC.cuda()
     criterion = nn.NLLLoss()
-    reg_params = list(gnnNets_NC.convs.parameters())
-    non_reg_params = list(gnnNets_NC.fcs.parameters())
-    optimizer = torch.optim.Adam([
-        dict(params=reg_params, weight_decay= wd1),
-        dict(params=non_reg_params, weight_decay=wd2)
-    ], lr=lr)
-    # optimizer = torch.optim.Adam(params=gnnNets_NC.parameters(), weight_decay= wd2, lr=lr)
+    # reg_params = list(gnnNets_NC.convs.parameters())
+    # non_reg_params = list(gnnNets_NC.fcs.parameters())
+    # optimizer = torch.optim.Adam([
+    #     dict(params=reg_params, weight_decay= wd1),
+    #     dict(params=non_reg_params, weight_decay=wd2)
+    # ], lr=lr)
+    optimizer = torch.optim.Adam(params=gnnNets_NC.parameters(), weight_decay= wd2, lr=lr)
 
     best_val_loss = float('inf')
     best_acc = 0
@@ -75,7 +75,7 @@ def train_NC(parser,  lr ,head, dropout, wd2, hid_dim):
     early_stop_count = 0
     data = data.cuda()
     stop_val_loss = float('inf')
-    for epoch in range(1, parser.epoch + 1):
+    for epoch in tqdm(range(1, parser.epoch + 1)):
         gnnNets_NC.train()
 
         logits= gnnNets_NC(data.x, data.edge_index)
@@ -183,12 +183,12 @@ class ARGS():
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', default='GCN2', dest='gnn models')
-    parser.add_argument('--model_name', default='GCN2')
+    parser.add_argument('--model_name', default='GCN_nopre')
     parser.add_argument('--model_level', default='node')
     parser.add_argument('--dim_hidden', default=64)
     parser.add_argument('--alpha', default=0.1)
     parser.add_argument('--theta', default=0.5)
-    parser.add_argument('--num_layers', default=64)
+    parser.add_argument('--num_layers', default=2)
     parser.add_argument('--shared_weights', default=False)
     parser.add_argument('--dropout', default=0.5)
     parser.add_argument('--dataset_dir', default='../datasets/')
@@ -197,7 +197,7 @@ if __name__ == '__main__':
     parser.add_argument('--save_epoch', default=10)
     parser.add_argument('--lr', default=0.01)
     parser.add_argument('--wd1', default=1e-2)
-    parser.add_argument('--wd2', default=5e-4)
+    parser.add_argument('--wd2', default=5e-3)
     parser.add_argument('--early_stopping', default=100)
     ps = parser.parse_args()
     heads = []
@@ -212,8 +212,8 @@ if __name__ == '__main__':
                     heads.append([a,b,c])
     heads = [[8,]]
     lrs = [1e-2]
-    dropouts = [0.6]
-    wd2s = [5e-4]
+    dropouts = [0.7]
+    wd2s = [1e-3]
     hid_dims = [64]
     best_acc = 0
     best_parameters = []

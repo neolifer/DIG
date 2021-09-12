@@ -81,8 +81,8 @@ class GNNExplainer(ExplainerBase):
         # train to get the mask
         optimizer = torch.optim.Adam([self.node_feat_mask, self.edge_mask],
                                      lr=self.lr)
-        for conv in self.model.convs:
-            conv.require_sigmoid = True
+        # for conv in self.model.convs:
+        #     conv.require_sigmoid = True
         for epoch in range(1, self.epochs + 1):
 
             if mask_features:
@@ -97,8 +97,8 @@ class GNNExplainer(ExplainerBase):
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-        for conv in self.model.convs:
-            conv.require_sigmoid = False
+        # for conv in self.model.convs:
+        #     conv.require_sigmoid = False
         return self.edge_mask.data
 
     def forward(self, x, edge_index, y,evaluation_confidence, mask_features=False, control_sparsity = False,**kwargs):
@@ -165,9 +165,12 @@ class GNNExplainer(ExplainerBase):
             else:
                 edge_masks.append(self.gnn_explainer_alg(new_x, new_edge_index, ex_label))
         related_preds = []
+        sparsity = 1
+        confidence = 0
         for e in evaluation_confidence:
-            sparsity = 1
-            confidence = 0
+            if confidence >= e:
+                related_preds.append(sparsity)
+                continue
             while confidence < e:
                 edge_mask= self.control_sparsity(edge_masks[label], sparsity = sparsity)
                 with torch.no_grad():
