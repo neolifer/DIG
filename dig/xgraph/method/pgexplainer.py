@@ -744,7 +744,7 @@ class PGExplainer(nn.Module):
                     size_loss_temp = None
                     torch.cuda.empty_cache()
                     loss_tmp.backward()
-                    torch.nn.utils.clip_grad_value_(self.elayers.parameters(), 2)
+                torch.nn.utils.clip_grad_value_(self.elayers.parameters(), 2)
                 torch.cuda.empty_cache()
                 optimizer.step()
                 optimizer.zero_grad()
