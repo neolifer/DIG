@@ -40,7 +40,7 @@ parser.add_argument('--num_layers', default=2)
 parser.add_argument('--shared_weights', default=False)
 parser.add_argument('--dropout', default=0.1)
 parser.add_argument('--dataset_dir', default='./datasets/')
-parser.add_argument('--dataset_name', default='Cora')
+parser.add_argument('--dataset_name', default='Pubmed')
 parser.add_argument('--epoch', default=1000)
 parser.add_argument('--save_epoch', default=10)
 parser.add_argument('--lr', default=0.01)
@@ -53,37 +53,12 @@ parser = parser.parse_args()
 
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
-def index_to_mask(index, size):
-    mask = torch.zeros(size, dtype=torch.bool, device=index.device)
-    mask[index] = 1
-    return mask
 
-def split_dataset(dataset):
-    indices = []
-    num_classes = 8
-    train_percent = 0.7
-    for i in range(num_classes):
-        index = (dataset.data.y == i).nonzero().view(-1)
-        index = index[torch.randperm(index.size(0))]
-        indices.append(index)
 
-    train_index = torch.cat([i[:int(len(i) * train_percent)] for i in indices], dim=0)
-
-    rest_index = torch.cat([i[int(len(i) * train_percent):] for i in indices], dim=0)
-    rest_index = rest_index[torch.randperm(rest_index.size(0))]
-
-    dataset.data.train_mask = index_to_mask(train_index, size=dataset.data.num_nodes)
-    dataset.data.val_mask = index_to_mask(rest_index[:len(rest_index) // 2], size=dataset.data.num_nodes)
-    dataset.data.test_mask = index_to_mask(rest_index[len(rest_index) // 2:], size=dataset.data.num_nodes)
-
-    dataset.data, dataset.slices = dataset.collate([dataset.data])
-
-    return dataset
-
-if parser.dataset_name != 'Cora':
+if parser.dataset_name not in  ['Cora','Pubmed']:
     dataset = get_dataset(parser)
 else:
-    dataset = Planetoid('./datasets', 'Cora',split="public", transform = T.NormalizeFeatures())
+    dataset = Planetoid('./datasets', parser.dataset_name,split="public", transform = T.NormalizeFeatures())
 dataset.data.x = dataset.data.x.to(torch.float32)
 # dataset.data.x = dataset.data.x[:, :1]
 # dataset.data.y = dataset.data.y[:, 2]
@@ -131,7 +106,7 @@ dropout=parser.dropout
 # ckpt_path = osp.join('checkpoints', 'cora', 'GM_GCN2','GCN2_best.pth')
 model = GM_GCN(num_layers, dim_node, dim_hidden, num_classes)
 # ckpt_path = osp.join('checkpoints', 'ba_community', 'GM_GCN','GM_GCN_100_best.pth')
-ckpt_path = osp.join('checkpoints', 'cora', 'GM_GCN','GM_GCN_nopre_best.pth')
+ckpt_path = osp.join('checkpoints', 'pubmed', 'GM_GCN','GM_GCN_nopre_best.pth')
 model.load_state_dict(torch.load(ckpt_path)['net'])
 from dig.xgraph.method import GNNExplainer
 # explainer = GNNExplainer(model, epochs=100, lr=0.01, explain_graph=False)

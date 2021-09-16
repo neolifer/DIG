@@ -21,10 +21,10 @@ def train_NC(parser,  lr ,head, dropout, wd2, hid_dim):
     GNNs = {'GCN2': GCN2}
     # print('start loading data====================')
     # import pdb; pdb.set_trace()
-    if parser.dataset_name != 'Cora':
+    if parser.dataset_name not in  ['Cora','Pubmed']:
         dataset = get_dataset(parser)
     else:
-        dataset = Planetoid('../datasets', 'Cora',split="public")
+        dataset = Planetoid('../datasets', parser.dataset_name,split="public")
     dataset.data.x = dataset.data.x.to(torch.float32)
     # dataset.data.x = dataset.data.x[:, :1]
     input_dim = dataset.num_node_features
@@ -213,7 +213,7 @@ if __name__ == '__main__':
     heads = [[8,]]
     lrs = [1e-2]
     dropouts = [0.7]
-    wd2s = [1e-3]
+    wd2s = [1e-2]
     hid_dims = [64]
     best_acc = 0
     best_parameters = []

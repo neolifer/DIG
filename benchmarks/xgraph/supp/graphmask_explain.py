@@ -50,10 +50,10 @@ import numpy as np
 np.random.seed(0)
 
 
-if parser.dataset_name != 'Cora':
+if parser.dataset_name not in  ['Cora','Pubmed']:
     dataset = get_dataset(parser)
 else:
-    dataset = Planetoid('./datasets', 'Cora',split="public", transform = T.NormalizeFeatures())
+    dataset = Planetoid('./datasets', parser.dataset_name,split="public", transform = T.NormalizeFeatures())
 # dim_node = dataset.num_node_features
 dataset.data.x = dataset.data.x.to(torch.float32)
 
@@ -123,10 +123,11 @@ GraphMask = GraphMaskAdjMatProbe(vertex_dims, message_dims, num_classes, vertex_
 model.cuda()
 GraphMask.cuda()
 allowance =  0.2
-pentalty_scalings = [5e-1]
+pentalty_scalings = [1e-1, 5e-2, 2e-1, 5e-1]
 # pentalty_scalings = [10]
 entropy_scales = [1]
-allowances = [0.03]
+allowances = [0.03, 0.05, 0.08, 0.1, 0.15, 0.2, 0.3]
+# allowances = [0.03]
 lr1s = [3e-2]
 lr2s = [1e-3]
 best_parameters = None
@@ -135,7 +136,9 @@ data = dataset.data
 # large_index = pk.load(open('large_subgraph_bacom.pk','rb'))['node_idx']
 # motif = pk.load(open('Ba_Community_motif.plk','rb'))
 # explain_node_index_list = list(set(large_index).intersection(set(motif.keys())))
-explain_node_index_list = torch.where(data.test_mask)[0]
+# explain_node_index_list = torch.where(data.test_mask)[0]
+
+explain_node_index_list = list(range(len(data.train_mask)))
 # for pentalty_scaling, entropy_scale, allowance,lr1, lr2 in tqdm.tqdm(product(pentalty_scalings, entropy_scales,allowances, lr1s, lr2s),
 #                                                                      total = len(list(product(pentalty_scalings, entropy_scales,allowances, lr1s, lr2s)))):
 for pentalty_scaling, entropy_scale, allowance,lr1, lr2 in product(pentalty_scalings, entropy_scales,allowances, lr1s, lr2s):
@@ -150,18 +153,18 @@ for pentalty_scaling, entropy_scale, allowance,lr1, lr2 in product(pentalty_scal
 
     # state_dict = torch.load('gm_gcn100_bacom.pt')
     # GraphMask.load_state_dict(state_dict)
-    # explainer.train_graphmask(dataset)
+    explainer.train_graphmask(dataset)
     # probs, sizes = explainer.train_graphmask(dataset)
     # outputs = {'prob':np.array(probs), 'graph_size':np.array(sizes)}
     # seaborn.scatterplot(y = 'prob', x = 'graph_size', data = outputs)
     # seaborn.histplot(x = 'graph_size', data=outputs)
     # plt.show()
     # sys.exit()
-    # torch.save(GraphMask.state_dict(), 'checkpoints/explainer/cora/gm_gcn_free_confirm_003_nopre.pt')
+    torch.save(GraphMask.state_dict(), f'checkpoints/explainer/pubmed/gm_gcn_constrained_{allowance}_nopre.pt')
     #
-    state_dict = torch.load('checkpoints/explainer/cora/gm_gcn_constrained_confirm_003_nopre.pt')
+    # state_dict = torch.load('checkpoints/explainer/cora/gm_gcn_constrained_confirm_003_nopre.pt')
     # state_dict = torch.load('gm_gcn100_bacom_free.pt')
-    GraphMask.load_state_dict(state_dict)
+    # GraphMask.load_state_dict(state_dict)
     # sys.exit()
 
     #
@@ -203,18 +206,18 @@ for pentalty_scaling, entropy_scale, allowance,lr1, lr2 in product(pentalty_scal
     inv_fidelity2 = []
     in_motifs = []
     sparsitys = []
-
     subgraphs = {}
-
-    # explain_node_index_list = torch.where(data.test_mask)[0][:1]
+    # explain_node_index_list = torch.where(data.test_mask)[0]
+    explain_node_index_list = torch.where(data.test_mask)[0]
     for j, node_idx in tqdm.tqdm(enumerate(explain_node_index_list), total= len(explain_node_index_list)):
         x, edge_index, y, subset, _ = explainer.get_subgraph(node_idx, data.x, data.edge_index,data.y)
         subgraphs[j] = {'x':x.cpu(), 'edge_index':edge_index.cpu(), 'new_node_idx':torch.where(subset == node_idx)[0].cpu(), 'y':y}
     import pickle as pk
-    data = None
+
     for _ in range(1):
         spars = [0 for _ in range(len(c))]
-
+        # spars = 0
+        # confidence = 0
         for j, node_idx in tqdm.tqdm(enumerate(explain_node_index_list), total= len(explain_node_index_list)):
         # for j, node_idx in enumerate(explain_node_index_list):
 
@@ -227,16 +230,17 @@ for pentalty_scaling, entropy_scale, allowance,lr1, lr2 in product(pentalty_scal
                               x = subgraph['x'], edge_index = subgraph['edge_index'], new_node_idx = subgraph['new_node_idx'], y = subgraph['y'])
             for i in range(len(c)):
                 spars[i] += related_preds[i]['sparsity']
-
+            # spars += related_preds['sparsity']
+            # confidence += related_preds['evaluation_confidence']
         for i in range(len(c)):
             sparsity = spars[i]/(j + 1)
             sparsitys.append(sparsity)
             if sparsity < best_spar:
                 best_parameters = [pentalty_scaling, entropy_scale, allowance,lr1, lr2]
                 best_spar = sparsity
-            # print(f'parameters:{[pentalty_scaling, entropy_scale, allowance,lr1, lr2]}\n'
-            #       f'explanation_confidence: {c[i]:.2f}\n'
-            #       f'Sparsity: {sparsity:.4f}')
+            print(f'parameters:{[pentalty_scaling, entropy_scale, allowance,lr1, lr2]}\n'
+                  f'explanation_confidence: {c[i]:.2f}\n'
+                  f'Sparsity: {sparsity:.4f}')
     print('evaluation_confidence: ',c)
     print('sparsity: ', sparsitys)
 print('best parameters: ', best_parameters,

@@ -596,10 +596,8 @@ class PGExplainer(nn.Module):
         #     f2 = embed[row]
         #     self_embed = embed[node_idx].repeat(f1.shape[0], 1)
         #     f12self = torch.cat([f1, f2, self_embed], dim=-1)
-        f12self = embed
+        h = embed
         # using the node embedding to calculate the edge weight
-        h = f12self.to(self.device)
-
         for elayer in self.elayers:
             h = elayer(h)
 
@@ -723,11 +721,11 @@ class PGExplainer(nn.Module):
                     x, edge_index, real_pred,new_node_index, emb= batch.x, batch.edge_index, \
                                                                   batch.real_pred, batch.node_index, batch.emb
 
-                    x = x.to('cuda:0')
-                    edge_index = edge_index.to('cuda:0')
-                    real_pred = real_pred.to('cuda:0')
-                    new_node_index = new_node_index.to('cuda:0')
-                    emb = emb.to('cuda:0')
+                    x.to('cuda:0')
+                    edge_index.to('cuda:0')
+                    real_pred.to('cuda:0')
+                    new_node_index.to('cuda:0')
+                    emb.to('cuda:0')
                     node_size = emb.shape[0]
                     feature_dim = emb.shape[1]
                     # pred, _ = self.explain(x, edge_index, emb, tmp, training=True, node_idx=new_node_index)
@@ -803,9 +801,9 @@ class PGExplainer(nn.Module):
             # masked value
             # x, edge_index, y, subset, _ = self.get_subgraph(node_idx=node_idx, x=data.x, edge_index=data.edge_index, y=data.y)
             # new_node_idx = torch.where(subset == node_idx)[0]
-            x = x.to(self.device)
-            edge_index = edge_index.to(self.device)
-            emb = emb.to(self.device)
+            x.to(self.device)
+            edge_index.to(self.device)
+            emb.to(self.device)
 
             edge_index = add_remaining_self_loops(edge_index)[0]
             with torch.no_grad():
