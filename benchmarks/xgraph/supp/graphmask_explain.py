@@ -123,10 +123,10 @@ GraphMask = GraphMaskAdjMatProbe(vertex_dims, message_dims, num_classes, vertex_
 model.cuda()
 GraphMask.cuda()
 allowance =  0.2
-pentalty_scalings = [1e-1, 5e-2, 2e-1, 5e-1]
+pentalty_scalings = [5e-1,1e-1,2e-1,3e-1,4e-1]
 # pentalty_scalings = [10]
 entropy_scales = [1]
-allowances = [0.03, 0.05, 0.08, 0.1, 0.15, 0.2, 0.3]
+allowances = [0.15,0.2,0.25,0.3,0.35]
 # allowances = [0.03]
 lr1s = [3e-2]
 lr2s = [1e-3]

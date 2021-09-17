@@ -354,14 +354,14 @@ class GraphMaskExplainer(torch.nn.Module):
                     # # loss += loss_temp.detach().item()
                     # # print(real_pred[node_idx])
 
-                # for i in range(len(gates)):
-                #     if self.graphmask.baselines[i].requires_grad == True:
-                #         print(f'layer{i}:',torch.sum(gates[i].detach()/gates[i].shape[-1], dim=-1),total_penalty)
+                for i in range(len(gates)):
+                    if self.graphmask.baselines[i].requires_grad == True:
+                        print(f'layer{i}:',torch.sum(gates[i].detach()/gates[i].shape[-1], dim=-1),total_penalty)
 
                 duration += time.perf_counter() - tic
 
 
-                # print(f'Layer: {layer} Epoch: {epoch} | Loss: {loss/(len(explain_node_index_list)/self.batch_size) }')
+                print(f'Layer: {layer} Epoch: {epoch} | Loss: {loss/(len(explain_node_index_list)/self.batch_size) }')
 
                     # for i in reversed(list(range(3))):
                     #     writer.add_scalar(f'Gate{epoch}{i}/train', gates[i].sum().detach().item(), epoch)
@@ -406,13 +406,17 @@ class GraphMaskExplainer(torch.nn.Module):
         related_preds = []
         top_k = 0
         sparsity = 1.0
+        gate = [[],[]]
 
-        # top_k = gates[-1].sum().item()
-        for i in range(len(gates)):
-            hard_concrete = (gates[i] >= 0.5).float()
-            gates[i] = gates[i] + (hard_concrete - gates[i]).detach()
-        gates[0] = gates[-1]
-        top_k = int(gates[1].sum().item())
+        # for i in range(len(gates)):
+        #     gate[i] = torch.clone(gates[i])
+        #     hard_concrete = (gate[i] >= 0.5).float()
+        #     gate[i] = gate[i] + (hard_concrete - gate[i]).detach()
+        # gates[0] = gates[-1]
+        top_k = 0
+        # for i in range(len(gates)):
+        #     hard_concrete = (gates[i] >= 0.5).float()
+        #     gates[i] = gates[i] + (hard_concrete - gates[i]).detach()
         # masked_pred = self.set_mask(x, edge_index, gates, new_node_idx, baselines)[label]
         # confidence = 1 - torch.abs(origin - masked_pred)/origin
         # print(confidence, (gates[-1].sum()/gates[-1].shape[0] + gates[0].sum()/gates[0].shape[0])/2)
