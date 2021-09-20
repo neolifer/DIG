@@ -10,7 +10,8 @@ import torch.nn.functional as F
 sys.path.append('../')
 sys.path.append('../..')
 from torch.optim import Adam
-from torch_geometric.data import Data, Batch,DataLoader
+from torch_geometric.data import Data, Batch
+from torch_geometric.loader import DataLoader
 import tqdm
 from torch_geometric.utils import to_networkx
 from .pgexplainer import k_hop_subgraph_with_default_whole_graph
@@ -41,7 +42,7 @@ writer = SummaryWriter()
 #             return super(Data).__inc__(key, value)
 class Temp_data(Data):
     def __init__(self, x=None, edge_index=None, edge_attr=None, y=None,
-                pos=None, normal=None, face=None, node_index = None, subset = None, real_pred = None,**kwargs):
+                 pos=None, normal=None, face=None, node_index = None, subset = None, real_pred = None,**kwargs):
         super(Temp_data, self).__init__()
         self.x = x
         self.edge_index = edge_index
@@ -260,32 +261,37 @@ class GraphMaskExplainer(torch.nn.Module):
         data = data.to(self.device)
         lagrangian_optimization = LagrangianOptimization(optimizer,
                                                          self.device,
-                                                        alpha_optimizer_lr=self.lr2
-                                                        )
+                                                         alpha_optimizer_lr=self.lr2
+                                                         )
 
         my_lr_scheduler1 = torch.optim.lr_scheduler.StepLR(optimizer= optimizer, step_size= 1000,gamma=0.1)
         my_lr_scheduler2 = torch.optim.lr_scheduler.StepLR(optimizer= lagrangian_optimization.optimizer_alpha,step_size=1000, gamma=0.1)
         with torch.no_grad():
             self.model.eval()
 
-            datalist = []
-            # large_index = pk.load(open('large_subgraph_bacom.pk','rb'))['node_idx']
-            # motif = pk.load(open('Ba_Community_motif.plk','rb'))
-            # explain_node_index_list = list(set(large_index).intersection(set(motif.keys())))
-            # explain_node_index_list = torch.where(data.x)[0]
-            explain_node_index_list = list(range(len(data.train_mask)))
-            probs = []
-            sizes = []
-            for node_idx in tqdm.tqdm(explain_node_index_list):
-            # for node_idx in explain_node_index_list:
-                x, edge_index, y, subset, _ = \
-                    self.get_subgraph(node_idx=node_idx, x=data.x, edge_index=data.edge_index, y=data.y)
-                new_node_idx = torch.where(subset == node_idx)[0]
-                datalist.append(Temp_data(x = x.cpu(), edge_index = edge_index.cpu(), node_index = torch.LongTensor([new_node_idx]).cpu()))
-
+            try:
+                datalist = torch.load('graphmask_bacom_sub.pt')
+            except:
+                datalist = []
+                large_index = pk.load(open('large_subgraph_bacom.pk','rb'))['node_idx']
+                motif = pk.load(open('Ba_Community_motif.plk','rb'))
+                explain_node_index_list = list(set(large_index).intersection(set(motif.keys())))
+                # explain_node_index_list = torch.where(data.x)[0]
+                # explain_node_index_list = list(range(len(data.train_mask)))
+                probs = []
+                sizes = []
+                for node_idx in tqdm.tqdm(explain_node_index_list):
+                    # for node_idx in explain_node_index_list:
+                    x, edge_index, y, subset, _ = \
+                        self.get_subgraph(node_idx=node_idx, x=data.x, edge_index=data.edge_index, y=data.y)
+                    new_node_idx = torch.where(subset == node_idx)[0]
+                    datalist.append(Temp_data(x = x.cpu(), edge_index = edge_index.cpu(), node_index = torch.LongTensor([new_node_idx]).cpu()))
+                torch.save(datalist,'graphmask_bacom_sub.pt')
             #     probs.append(F.softmax(self.model(x, edge_index)[new_node_idx], dim=-1).max(-1).values[0].cpu().data)
             #     sizes.append(edge_index.shape[-1])
             # return probs, sizes
+        explain_node_index_list = list(range(len(data.train_mask)))
+        datalist = datalist = torch.load('graphmask_bacom_sub.pt')
         data = None
         loader = DataLoader(datalist, batch_size=self.batch_size, shuffle= True)
 
@@ -295,7 +301,7 @@ class GraphMaskExplainer(torch.nn.Module):
             if layer == 0:
                 self.epoch += 1500
             for epoch in tqdm.tqdm(range(self.epoch)):
-            # for epoch in range(self.epoch):
+                # for epoch in range(self.epoch):
                 if layer == 0:
                     my_lr_scheduler1.step()
                     my_lr_scheduler2.step()
@@ -305,7 +311,7 @@ class GraphMaskExplainer(torch.nn.Module):
                 tic = time.perf_counter()
 
                 for i, batch in enumerate(loader):
-                # for batch in loader:
+                    # for batch in loader:
                     self.model.set_get_vertex(True)
 
                     x, edge_index, node_idx = batch.x, batch.edge_index, batch.node_index
@@ -363,9 +369,9 @@ class GraphMaskExplainer(torch.nn.Module):
 
                 print(f'Layer: {layer} Epoch: {epoch} | Loss: {loss/(len(explain_node_index_list)/self.batch_size) }')
 
-                    # for i in reversed(list(range(3))):
-                    #     writer.add_scalar(f'Gate{epoch}{i}/train', gates[i].sum().detach().item(), epoch)
-                    # writer.add_scalar(f'Loss{layer}/train', loss / len(data.train_mask), epoch)
+                # for i in reversed(list(range(3))):
+                #     writer.add_scalar(f'Gate{epoch}{i}/train', gates[i].sum().detach().item(), epoch)
+                # writer.add_scalar(f'Loss{layer}/train', loss / len(data.train_mask), epoch)
             # print(f"training time is {duration:.5}s")
 
     def forward(self,explanation_confidence,x, edge_index, new_node_idx,y, **kwargs):
@@ -435,7 +441,7 @@ class GraphMaskExplainer(torch.nn.Module):
                 ones = [torch.topk(gates[i], k= top_k, dim=0) for i in range(len(gates))]
                 mask = [torch.zeros_like(gates[i]) for i in range(len(gates))]
                 for k in range(len(gates)):
-                    mask[k][ones[1].indices] = 1
+                    mask[k][ones[k].indices] = 1
                 masked_pred = self.set_mask(x, edge_index, mask, new_node_idx, baselines)[label]
                 confidence = 1 - torch.abs(origin - masked_pred)/origin
 
@@ -463,15 +469,15 @@ class GraphMaskExplainer(torch.nn.Module):
         #     gates[i] = gates[i] + (hard_concrete - gates[i]).detach()
         # #     print(gates[i].sum())
         # related_preds = {}
-        # for i in range(len(gates)):
-        #     print((gates[i] == mask[i]).sum()/gates[i].shape[0])
-        # sys.exit()
-        # masked_pred = self.set_mask(x, edge_index, gates, new_node_idx,baselines)[label]
+        # # for i in range(len(gates)):
+        # #     print((gates[i] == mask[i]).sum()/gates[i].shape[0])
+        # # sys.exit()
+        # masked_pred = self.set_mask(x, edge_index, gates, new_node_idx, baselines)[label]
         # confidence = 1 - torch.abs(origin - masked_pred)/origin
         # spars = 0
         # for i in range(len(gates)):
-        #     spars += gates[i].sum()/gates[i].shape[0]
-        # # print(confidence, spars/2)
+        #     spars += 1 - gates[i].sum()/gates[i].shape[0]
+        # # # print(confidence, spars/2)
         # related_preds['evaluation_confidence'] = confidence
         # related_preds['sparsity'] = spars/2
         # print(related_preds)

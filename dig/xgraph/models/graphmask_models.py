@@ -104,8 +104,7 @@ class GM_GCNconv(gnn.GCNConv):
                 else:
                     edge_index = cache
         self.last_edge_index = edge_index
-        x = torch.matmul(x, self.weight)
-
+        x = self.lin(x)
         # propagate_type: (x: Tensor, edge_weight: OptTensor)
         out = self.propagate(edge_index, x=x, edge_weight=edge_weight,
                              size=None, message_scale=message_scale, message_replacement=message_replacement)
@@ -160,9 +159,9 @@ class GM_GCNconv(gnn.GCNConv):
             # procedure since this allows us to inject the `edge_mask` into the
             # message passing computation scheme.
             if self.__explain__:
-            #     if self.require_sigmoid:
-            #         edge_mask = self.__edge_mask__.sigmoid()
-            #     else:
+                #     if self.require_sigmoid:
+                #         edge_mask = self.__edge_mask__.sigmoid()
+                #     else:
                 edge_mask = self.__edge_mask__
                 # Some ops add self-loops to `edge_index`. We need to do the
                 # same for `edge_mask` (but do not train those).
@@ -192,8 +191,8 @@ class GM_GCN(nn.Module):
         self.require_sigmoid = requires_sigmoid
         self.convs = nn.ModuleList([GM_GCNconv(input_dim, hid_dim)]
                                    + [
-                                        GM_GCNconv(hid_dim, hid_dim)
-                                        for _ in range(n_layers - 1)
+                                       GM_GCNconv(hid_dim, hid_dim)
+                                       for _ in range(n_layers - 1)
                                    ]
                                    )
         self.hidden_dims = [hid_dim for _ in range(n_layers)]
@@ -343,7 +342,7 @@ class GM_GCN2Conv(gnn.GCN2Conv):
             self.latest_vertex_embeddings = torch.cat([x_j, x_i, message], dim = -1) if message_scale is not None else torch.cat([x_j, x_i, original_message], dim = -1)
             # self.latest_vertex_embeddings = [x_j, x_i, message] if message_scale is not None else [x_j, x_i, original_message]
 
-    # print(self.latest_vertex_embeddings.shape[0])
+        # print(self.latest_vertex_embeddings.shape[0])
         if message_scale is not None:
             return message
         return original_message
