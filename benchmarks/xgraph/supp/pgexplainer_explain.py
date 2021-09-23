@@ -32,14 +32,14 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--model', default='GCN2', dest='gnn models')
 parser.add_argument('--model_name', default='GCN')
 parser.add_argument('--model_level', default='node')
-parser.add_argument('--dim_hidden', default=20)
+parser.add_argument('--dim_hidden', default=64)
 parser.add_argument('--alpha', default=0.1)
 parser.add_argument('--theta', default=0.5)
-parser.add_argument('--num_layers', default=3)
+parser.add_argument('--num_layers', default=2)
 parser.add_argument('--shared_weights', default=False)
 parser.add_argument('--dropout', default=0.1)
 parser.add_argument('--dataset_dir', default='./datasets/')
-parser.add_argument('--dataset_name', default='Ba_Community')
+parser.add_argument('--dataset_name', default='Cora')
 parser.add_argument('--epoch', default=1000)
 parser.add_argument('--save_epoch', default=10)
 parser.add_argument('--lr', default=0.01)
@@ -93,11 +93,11 @@ batch = parser.batch
 # model = GCN2_mask(model_level, dim_node, dim_hidden, num_classes, alpha, theta, num_layers,
 #                    shared_weights, dropout)
 model = GM_GCN(n_layers = num_layers, input_dim = dim_node, hid_dim = dim_hidden, n_classes = num_classes)
-ckpt_path = osp.join('checkpoints', 'ba_community', 'GM_GCN','GM_GCN_100_best.pth')
+# ckpt_path = osp.join('checkpoints', 'ba_community', 'GM_GCN','GM_GCN_100_best.pth')
 
 # model = GM_GCN2(model_level, dim_node, dim_hidden, num_classes, alpha, theta, num_layers,
 #                 shared_weights)
-# ckpt_path = osp.join('checkpoints', 'cora', 'GM_GCN','GM_GCN_nopre_best.pth')
+ckpt_path = osp.join('checkpoints', 'cora', 'GM_GCN','GM_GCN_nopre_best.pth')
 # ckpt_path = osp.join('checkpoints', 'cora', 'GM_GCN2','GCN2_best.pth')
 model.load_state_dict(torch.load(ckpt_path)['net'])
 model.to(device)
@@ -233,7 +233,7 @@ torch.backends.cudnn.benchmark = True
 # tensor(0.1331) [0.34, 1, 1.5, 0.001]
 # tensor(0.1334) [0.3, 2.5, 1, 0.001]
 batch_size = 1
-coff_sizes = [6e-2]
+coff_sizes = [6e-3]
 coff_ents = [0.5]
 coff_preds = [2]
 lrs = [0.003]
@@ -304,13 +304,13 @@ for coff_size, coff_ent, coff_pred, lr in product(coff_sizes, coff_ents, coff_pr
         c.append(a)
         a += b
     # --- Set the Sparsity to 0.5
-    large_index = pk.load(open('large_subgraph_bacom.pk','rb'))['node_idx']
-    motif = pk.load(open('Ba_Community_motif.plk','rb'))
+    # large_index = pk.load(open('large_subgraph_bacom.pk','rb'))['node_idx']
+    # motif = pk.load(open('Ba_Community_motif.plk','rb'))
     # data = dataset[0].to(explainer.device)
     data = dataset.data.to(explainer.device)
-    explain_node_index_list = list(set(large_index).intersection(set(motif.keys())))
+    # explain_node_index_list = list(set(large_index).intersection(set(motif.keys())))
     subgraphs = {}
-    # explain_node_index_list = torch.where(data.test_mask)[0]
+    explain_node_index_list = torch.where(data.test_mask)[0]
     with torch.no_grad():
         for j, node_idx in tqdm(enumerate(explain_node_index_list), total= len(explain_node_index_list)):
             x, edge_index, y, subset, _ = explainer.get_subgraph(node_idx=node_idx, x=data.x, edge_index=data.edge_index, y=data.y)

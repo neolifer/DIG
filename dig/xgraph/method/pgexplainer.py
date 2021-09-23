@@ -677,9 +677,10 @@ class PGExplainer(nn.Module):
                 self.model.eval()
                 self.model.to(self.device)
                 # explain_node_index_list = torch.where(data.test_mask)[0]
-                large_index = pk.load(open('large_subgraph_bacom.pk','rb'))['node_idx']
-                motif = pk.load(open('Ba_Community_motif.plk','rb'))
-                explain_node_index_list = list(set(large_index).intersection(set(motif.keys())))
+                explain_node_index_list = list(range(len(data.train_mask)))
+                # large_index = pk.load(open('large_subgraph_bacom.pk','rb'))['node_idx']
+                # motif = pk.load(open('Ba_Community_motif.plk','rb'))
+                # explain_node_index_list = list(set(large_index).intersection(set(motif.keys())))
                 # with torch.no_grad():
                 #     emb = self.model.get_emb(data.x, data.edge_index)
             with torch.no_grad():

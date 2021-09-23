@@ -159,10 +159,10 @@ class GM_GCNconv(gnn.GCNConv):
             # procedure since this allows us to inject the `edge_mask` into the
             # message passing computation scheme.
             if self.__explain__:
-                #     if self.require_sigmoid:
-                #         edge_mask = self.__edge_mask__.sigmoid()
-                #     else:
-                edge_mask = self.__edge_mask__
+                if self.require_sigmoid:
+                    edge_mask = self.__edge_mask__.sigmoid()
+                else:
+                    edge_mask = self.__edge_mask__
                 # Some ops add self-loops to `edge_index`. We need to do the
                 # same for `edge_mask` (but do not train those).
 

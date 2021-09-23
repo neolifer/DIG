@@ -33,14 +33,14 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--model', default='GCN2', dest='gnn models')
 parser.add_argument('--model_name', default='GCN2')
 parser.add_argument('--model_level', default='node')
-parser.add_argument('--dim_hidden', default=20)
+parser.add_argument('--dim_hidden', default=64)
 parser.add_argument('--alpha', default=0.5)
 parser.add_argument('--theta', default=0.5)
-parser.add_argument('--num_layers', default=3)
+parser.add_argument('--num_layers', default=2)
 parser.add_argument('--shared_weights', default=False)
 parser.add_argument('--dropout', default=0.1)
 parser.add_argument('--dataset_dir', default='./datasets/')
-parser.add_argument('--dataset_name', default='Ba_Community')
+parser.add_argument('--dataset_name', default='Pubmed')
 parser.add_argument('--epoch', default=1000)
 parser.add_argument('--save_epoch', default=10)
 parser.add_argument('--lr', default=0.01)
@@ -105,12 +105,12 @@ dropout=parser.dropout
 #                 shared_weights)
 # ckpt_path = osp.join('checkpoints', 'cora', 'GM_GCN2','GCN2_best.pth')
 model = GM_GCN(num_layers, dim_node, dim_hidden, num_classes)
-ckpt_path = osp.join('checkpoints', 'ba_community', 'GM_GCN','GM_GCN_100_best.pth')
-# ckpt_path = osp.join('checkpoints', 'cora', 'GM_GCN','GM_GCN_nopre_best.pth')
+# ckpt_path = osp.join('checkpoints', 'ba_community', 'GM_GCN','GM_GCN_100_best.pth')
+ckpt_path = osp.join('checkpoints', 'pubmed', 'GM_GCN','GM_GCN_nopre_best.pth')
 model.load_state_dict(torch.load(ckpt_path)['net'])
 from dig.xgraph.method import GNNExplainer
 # explainer = GNNExplainer(model, epochs=100, lr=0.01, explain_graph=False)
-explainer = GNNExplainer(model, epochs=1000, lr=0.01, explain_graph=False)
+explainer = GNNExplainer(model, epochs=100, lr=0.01, explain_graph=False)
 explainer.model.set_get_vertex(False)
 # edge_index = dataset[0].edge_index
 # dist_dict = {}
@@ -167,17 +167,17 @@ while a < 1:
 sparsitys = []
 
 
-large_index = pk.load(open('large_subgraph_bacom.pk','rb'))['node_idx']
-motif = pk.load(open('Ba_Community_motif.plk','rb'))
+# large_index = pk.load(open('large_subgraph_bacom.pk','rb'))['node_idx']
+# motif = pk.load(open('Ba_Community_motif.plk','rb'))
 
 
 
 for _ in range(1):
     # node_indices = list(set(large_index).intersection(set(motif.keys())))
     data = dataset.data
-    node_indices = list(set(large_index).intersection(set(motif.keys())))
+    # node_indices = list(set(large_index).intersection(set(motif.keys())))
     # node_indices = list(motif.keys())
-    # node_indices = torch.where(data.test_mask)[0]
+    node_indices = torch.where(data.test_mask)[0]
     spar = [0 for e in c]
     for j, node_idx in tqdm(enumerate(node_indices), total = len(node_indices)):
         import random
@@ -186,7 +186,7 @@ for _ in range(1):
         random.seed(0)
         np.random.seed(0)
         data.to(device)
-        _, _, _, masks, related_preds = \
+        _, _, _, mask, related_preds = \
             explainer(data.x, data.edge_index, num_classes=num_classes, node_idx=node_idx,
                       y = data.y, evaluation_confidence = c,control_sparsity = False)
         for i in range(len(spar)):

@@ -44,14 +44,17 @@ class GNNExplainer(ExplainerBase):
 
     def __init__(self, model, epochs=1000, lr=0.01, explain_graph=False):
         super(GNNExplainer, self).__init__(model, epochs, lr, explain_graph)
-
+        self.loss = torch.nn.NLLLoss()
 
 
     def __loss__(self, raw_preds, x_label):
         if self.explain_graph:
             loss = cross_entropy_with_logit(raw_preds, x_label)
         else:
-            loss = cross_entropy_with_logit(raw_preds[self.node_idx].unsqueeze(0), x_label)
+            raw_preds = F.log_softmax(raw_preds, dim = -1)
+            # print(raw_preds[self.node_idx].shape, x_label.unsqueeze(0).shape)
+            # sys.exit()
+            loss = self.loss(raw_preds[self.node_idx].unsqueeze(0), x_label.unsqueeze(0))
 
         m = self.edge_mask.sigmoid()
         loss = loss + self.coeffs['edge_size'] * m.sum()
@@ -81,8 +84,8 @@ class GNNExplainer(ExplainerBase):
         # train to get the mask
         optimizer = torch.optim.Adam([self.node_feat_mask, self.edge_mask],
                                      lr=self.lr)
-        # for conv in self.model.convs:
-        #     conv.require_sigmoid = True
+        for conv in self.model.convs:
+            conv.require_sigmoid = True
         for epoch in range(1, self.epochs + 1):
 
             if mask_features:
@@ -97,8 +100,8 @@ class GNNExplainer(ExplainerBase):
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-        # for conv in self.model.convs:
-        #     conv.require_sigmoid = False
+        for conv in self.model.convs:
+            conv.require_sigmoid = False
         return self.edge_mask.data
 
     def forward(self, x, edge_index, y,evaluation_confidence, mask_features=False, control_sparsity = False,**kwargs):
@@ -148,22 +151,16 @@ class GNNExplainer(ExplainerBase):
         # Assume the mask we will predict
         new_edge_index = add_remaining_self_loops(new_edge_index)[0]
 
-        labels = tuple(i for i in range(kwargs.get('num_classes')))
-        ex_labels = tuple(torch.tensor([label]).to(self.device) for label in labels)
         self.model.to(x.device)
         label = F.softmax(self.model(new_x, new_edge_index), dim = -1)[new_node_index].squeeze().argmax(-1)
         # Calculate mask
-        edge_masks = []
-        for ex_label in ex_labels:
-            self.__clear_masks__()
-            self.__set_masks__(new_x, new_edge_index)
-            if not ex_label == label:
-                edge_masks.append(None)
-                continue
-            if control_sparsity:
-                edge_masks.append(self.control_sparsity(self.gnn_explainer_alg(new_x, new_edge_index, ex_label), sparsity=kwargs.get('sparsity')))
-            else:
-                edge_masks.append(self.gnn_explainer_alg(new_x, new_edge_index, ex_label))
+
+
+        self.__clear_masks__()
+        self.__set_masks__(new_x, new_edge_index)
+
+
+        edge_mask= self.gnn_explainer_alg(new_x, new_edge_index, label)
         related_preds = []
         sparsity = 1
         confidence = 0
@@ -172,9 +169,9 @@ class GNNExplainer(ExplainerBase):
                 related_preds.append(sparsity)
                 continue
             while confidence < e:
-                edge_mask= self.control_sparsity(edge_masks[label], sparsity = sparsity)
+                temp_mask = self.control_sparsity(edge_mask, sparsity = sparsity)
                 with torch.no_grad():
-                    temp = self.eval_related_pred(new_x, new_edge_index, edge_mask, label, **kwargs)
+                    temp = self.eval_related_pred(new_x, new_edge_index, temp_mask, label, **kwargs)
                 confidence = temp[0]['evaluation_confidence'].item()
                 if confidence >= e:
                     related_preds.append(sparsity)
@@ -183,7 +180,7 @@ class GNNExplainer(ExplainerBase):
                     sparsity -= 0.05
         self.__clear_masks__()
 
-        return self.hard_edge_mask, x, new_edge_index, edge_masks, related_preds
+        return self.hard_edge_mask, x, new_edge_index, edge_mask, related_preds
 
 
 

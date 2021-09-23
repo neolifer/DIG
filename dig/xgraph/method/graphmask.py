@@ -66,8 +66,8 @@ class HardConcrete(torch.nn.Module):
         if self.training:
             u = torch.empty_like(input_element).uniform_(1e-6, 1.0-1e-6)
 
-            s = sigmoid((input_element) / self.temp)
-            # s = sigmoid((torch.log(u) - torch.log(1 - u) + input_element) / self.temp)
+            # s = sigmoid((input_element) / self.temp)
+            s = sigmoid((torch.log(u) - torch.log(1 - u) + input_element) / self.temp)
             penalty = sigmoid(input_element)
             # penalty = sigmoid(input_element - self.temp * self.gamma_zeta_ratio)
 
@@ -250,7 +250,7 @@ class GraphMaskExplainer(torch.nn.Module):
 
 
 
-    def train_graphmask(self, dataset):
+    def train_graphmask(self, dataset, dataset_name):
 
 
         optimizer = Adam(self.graphmask.parameters(), lr=self.lr1, weight_decay=1e-5)
@@ -270,14 +270,15 @@ class GraphMaskExplainer(torch.nn.Module):
             self.model.eval()
 
             try:
-                datalist = torch.load('graphmask_bacom_sub.pt')
+                datalist = torch.load(f'checkpoints/graphmask_sub/graphmask_{dataset_name}_sub_train.pt')
             except:
                 datalist = []
-                large_index = pk.load(open('large_subgraph_bacom.pk','rb'))['node_idx']
-                motif = pk.load(open('Ba_Community_motif.plk','rb'))
-                explain_node_index_list = list(set(large_index).intersection(set(motif.keys())))
+                # large_index = pk.load(open('large_subgraph_bacom.pk','rb'))['node_idx']
+                # motif = pk.load(open('Ba_Community_motif.plk','rb'))
+                # explain_node_index_list = list(set(large_index).intersection(set(motif.keys())))
                 # explain_node_index_list = torch.where(data.x)[0]
                 # explain_node_index_list = list(range(len(data.train_mask)))
+                explain_node_index_list = torch.where(data.test_mask)[0]
                 probs = []
                 sizes = []
                 for node_idx in tqdm.tqdm(explain_node_index_list):
@@ -286,12 +287,12 @@ class GraphMaskExplainer(torch.nn.Module):
                         self.get_subgraph(node_idx=node_idx, x=data.x, edge_index=data.edge_index, y=data.y)
                     new_node_idx = torch.where(subset == node_idx)[0]
                     datalist.append(Temp_data(x = x.cpu(), edge_index = edge_index.cpu(), node_index = torch.LongTensor([new_node_idx]).cpu()))
-                torch.save(datalist,'graphmask_bacom_sub.pt')
+                torch.save(datalist,f'checkpoints/graphmask_sub/graphmask_{dataset_name}_sub_train.pt')
             #     probs.append(F.softmax(self.model(x, edge_index)[new_node_idx], dim=-1).max(-1).values[0].cpu().data)
             #     sizes.append(edge_index.shape[-1])
             # return probs, sizes
         explain_node_index_list = list(range(len(data.train_mask)))
-        datalist = datalist = torch.load('graphmask_bacom_sub.pt')
+        datalist = datalist = torch.load(f'checkpoints/graphmask_sub/graphmask_{dataset_name}_sub_train.pt')
         data = None
         loader = DataLoader(datalist, batch_size=self.batch_size, shuffle= True)
 
