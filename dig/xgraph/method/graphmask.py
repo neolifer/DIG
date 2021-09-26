@@ -255,9 +255,7 @@ class GraphMaskExplainer(torch.nn.Module):
 
         optimizer = Adam(self.graphmask.parameters(), lr=self.lr1, weight_decay=1e-5)
         decayRate = 0.96
-
         data = dataset.data
-
         data = data.to(self.device)
         lagrangian_optimization = LagrangianOptimization(optimizer,
                                                          self.device,
@@ -291,7 +289,7 @@ class GraphMaskExplainer(torch.nn.Module):
             #     probs.append(F.softmax(self.model(x, edge_index)[new_node_idx], dim=-1).max(-1).values[0].cpu().data)
             #     sizes.append(edge_index.shape[-1])
             # return probs, sizes
-        explain_node_index_list = list(range(len(data.train_mask)))
+        explain_node_index_list = torch.where(data.test_mask)[0]
         datalist = datalist = torch.load(f'checkpoints/graphmask_sub/graphmask_{dataset_name}_sub_train.pt')
         data = None
         loader = DataLoader(datalist, batch_size=self.batch_size, shuffle= True)
@@ -337,7 +335,7 @@ class GraphMaskExplainer(torch.nn.Module):
                             real_baseline.append(baselines[i])
 
                     self.model.set_get_vertex(False)
-                    logits = self.model(x,edge_index, gates, real_baseline)
+                    logits = self.model(x,edge_index, gates)
                     pred = F.log_softmax(logits, dim=-1)
                     self.model.set_get_vertex(True)
                     # print(real_pred.shape, pred.shape)
@@ -443,7 +441,7 @@ class GraphMaskExplainer(torch.nn.Module):
                 mask = [torch.zeros_like(gates[i]) for i in range(len(gates))]
                 for k in range(len(gates)):
                     mask[k][ones[k].indices] = 1
-                masked_pred = self.set_mask(x, edge_index, mask, new_node_idx, baselines)[label]
+                masked_pred = self.set_mask(x, edge_index, mask, new_node_idx)[label]
                 confidence = 1 - torch.abs(origin - masked_pred)/origin
 
                 if confidence >= explanation_confidence[i]:
@@ -493,3 +491,101 @@ class GraphMaskExplainer(torch.nn.Module):
         prob = F.softmax(logits, dim = -1)[node_idx].squeeze()
         self.model.set_get_vertex(True)
         return prob
+
+    def train_explain_single(self, x, edge_index, new_node_idx):
+        optimizer = Adam(self.graphmask.parameters(), lr=self.lr1, weight_decay=1e-5)
+        decayRate = 0.96
+        lagrangian_optimization = LagrangianOptimization(optimizer,
+                                                         self.device,
+                                                         alpha_optimizer_lr=self.lr2
+                                                         )
+
+        my_lr_scheduler1 = torch.optim.lr_scheduler.StepLR(optimizer= optimizer, step_size= 1000,gamma=0.1)
+        my_lr_scheduler2 = torch.optim.lr_scheduler.StepLR(optimizer= lagrangian_optimization.optimizer_alpha,step_size=1000, gamma=0.1)
+        a = 0.50
+        b = 0.05
+        c = []
+        while a < 1:
+            c.append(a)
+            a += b
+
+
+        self.graphmask.train()
+        self.model.eval()
+
+        x = x.to('cuda:0')
+        edge_index = edge_index.to('cuda:0')
+        node_idx = new_node_idx.to('cuda:0')
+        self.model.set_get_vertex(True)
+        with torch.no_grad():
+            logits = self.model(x, edge_index)
+            probs = F.softmax(logits, dim=-1)[node_idx].squeeze()
+            label = probs.argmax(-1)
+            real_pred = logits.argmax(-1).detach()
+            pred = F.log_softmax(logits, dim=-1)
+            real_loss = self.loss(pred[node_idx], real_pred[node_idx])
+        self.model.set_get_vertex(False)
+        for layer in reversed(list(range(len(self.model.convs)))):
+            self.graphmask.enable_layer(layer)
+        duration = 0.0
+        if layer == 0:
+            self.epoch += 100
+        for epoch in range(self.epoch):
+            # for epoch in range(self.epoch):
+            if layer == 0:
+                my_lr_scheduler1.step()
+                my_lr_scheduler2.step()
+
+            gates, baselines, total_penalty = self.graphmask(self.model)
+            real_baseline = []
+
+            for i in range(len(gates)):
+                if baselines[i].requires_grad == False:
+                    gates[i] = None
+                    real_baseline.append(None)
+                else:
+                    real_baseline.append(baselines[i])
+            logits = self.model(x,edge_index, gates)
+            pred = F.log_softmax(logits, dim=-1)
+            loss_temp = self.loss(pred[node_idx], real_pred[node_idx]) - real_loss
+            g = torch.relu(loss_temp - self.allowance).mean()
+            f = total_penalty*self.penalty_scaling
+            loss2 = lagrangian_optimization.update(f, self.entropy_scale*g, self.graphmask)
+        self.graphmask.eval()
+        gates, baselines, total_penalty = self.graphmask(self.model, training = False)
+        origin = probs[label]
+        related_preds = []
+        top_k = 0
+        # for i in range(len(gates)):
+        #     hard_concrete = (gates[i] >= 0.5).float()
+        #     gates[i] = gates[i] + (hard_concrete - gates[i]).detach()
+        # masked_pred = self.set_mask(x, edge_index, gates, new_node_idx, baselines)[label]
+        # confidence = 1 - torch.abs(origin - masked_pred)/origin
+        # print(confidence, (gates[-1].sum()/gates[-1].shape[0] + gates[0].sum()/gates[0].shape[0])/2)
+        # sys.exit()
+        confidence = 0
+        explanation_confidence = c
+        for i in range(len(explanation_confidence)):
+            if confidence >= explanation_confidence[i]:
+                related_preds.append({
+                    'explanation_confidence':explanation_confidence[i],
+                    'sparsity': 1- top_k/gates[-1].shape[0]})
+                continue
+            while confidence < explanation_confidence[i]:
+                # top_k = int((1- sparsity)*gates[-1].shape[0])
+                ones = [torch.topk(gates[i], k= top_k, dim=0) for i in range(len(gates))]
+                mask = [torch.zeros_like(gates[i]) for i in range(len(gates))]
+                for k in range(len(gates)):
+                    mask[k][ones[k].indices] = 1
+                masked_pred = self.set_mask(x, edge_index, mask, new_node_idx)[label]
+                confidence = 1 - torch.abs(origin - masked_pred)/origin
+
+                if confidence >= explanation_confidence[i]:
+                    related_preds.append({
+                        'explanation_confidence':explanation_confidence[i],
+                        'sparsity': 1- top_k/gates[-1].shape[0]})
+                    break
+
+                else:
+                    top_k += 1
+        return related_preds
