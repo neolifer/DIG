@@ -529,7 +529,7 @@ class GraphMaskExplainer(torch.nn.Module):
             self.graphmask.enable_layer(layer)
         duration = 0.0
         if layer == 0:
-            self.epoch += 100
+            self.epoch += 300
         for epoch in range(self.epoch):
             # for epoch in range(self.epoch):
             if layer == 0:
@@ -551,6 +551,10 @@ class GraphMaskExplainer(torch.nn.Module):
             g = torch.relu(loss_temp - self.allowance).mean()
             f = total_penalty*self.penalty_scaling
             loss2 = lagrangian_optimization.update(f, self.entropy_scale*g, self.graphmask)
+            for i in range(len(gates)):
+                if self.graphmask.baselines[i].requires_grad == True:
+                    print(f'layer{i}:',torch.sum(gates[i].detach()/gates[i].shape[-1], dim=-1),total_penalty)
+            print(f'Layer: {layer} Epoch: {epoch} | Loss: {g}')
         self.graphmask.eval()
         gates, baselines, total_penalty = self.graphmask(self.model, training = False)
         origin = probs[label]

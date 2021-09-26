@@ -260,7 +260,7 @@ class GM_GCN(nn.Module):
         latest_vertex_embeddings = []
         for conv in self.convs:
             latest_vertex_embeddings.append(conv.get_latest_vertex_embedding())
-            conv.latest_vertex_embeddings = None
+            # conv.latest_vertex_embeddings = None
         return latest_vertex_embeddings
 
     def get_message_dim(self):

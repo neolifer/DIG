@@ -123,7 +123,7 @@ GraphMask = GraphMaskAdjMatProbe(vertex_dims, message_dims, num_classes, hidden_
 model.cuda()
 GraphMask.cuda()
 allowance =  0.2
-penalty_scalings = [0.3,0.5,0.1]
+penalty_scalings = [0.003]
 # penalty_scalings = [10]
 entropy_scales = [1]
 allowances = [0.03, 0.1,0.05]
