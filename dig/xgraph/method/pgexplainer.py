@@ -901,6 +901,107 @@ class PGExplainer(nn.Module):
                                            y=y,
                                            node_idx=new_node_idx,
                                            figname=vis_name)
+    def train_explain_single(self,emb,explanation_confidence,x, edge_index, new_node_idx,subset,node_size, feature_dim,
+                             **kwargs):
+        x = x.to(self.device)
+        edge_index = edge_index.to(self.device)
+        emb = emb.to(self.device)
 
+        edge_index = add_remaining_self_loops(edge_index)[0]
+        with torch.no_grad():
+            logits = self.model(x, edge_index)
+            probs = F.softmax(logits, dim=-1)[new_node_idx]
+            probs = probs.squeeze()
+        label = probs.argmax(-1)
+        self.elayers.train()
+        for epoch in range(self.epochs):
+            # for epoch in tqdm.tqdm(range(self.epochs)):
+            torch.cuda.empty_cache()
+            optimizer.zero_grad()
+            tmp = 1
+
+
+            pred_loss = 0
+            size_loss = 0
+            # self.model.set_get_vertex(False)
+            for batch in tqdm.tqdm(loader):
+                torch.cuda.empty_cache()
+                x, edge_index, real_pred,new_node_index, emb= batch.x, batch.edge_index, \
+                                                              batch.real_pred, batch.node_index, batch.emb
+
+                x = x.to('cuda:0')
+                edge_index = edge_index.to('cuda:0')
+                real_pred = real_pred.to('cuda:0')
+                new_node_index = new_node_index.to('cuda:0')
+                emb = emb.to('cuda:0')
+                node_size = emb.shape[0]
+                feature_dim = emb.shape[1]
+                # pred, _ = self.explain(x, edge_index, emb, tmp, training=True, node_idx=new_node_index)
+                pred, _ = self.explain(x, edge_index, emb, tmp, training=True, node_idx=new_node_index, node_size = node_size, feature_dim = feature_dim)
+                # sys.exit()
+
+                loss_tmp, pred_loss_tmp, size_loss_temp = self.__loss__(pred[new_node_index], real_pred[new_node_index])
+
+
+                # print(pred_loss_tmp.detach().item())
+                size_loss += size_loss_temp.detach().item()
+                pred_loss += pred_loss_tmp.detach().sum().item()
+                pred_loss_tmp = None
+                size_loss_temp = None
+                torch.cuda.empty_cache()
+                loss_tmp.backward()
+            torch.nn.utils.clip_grad_value_(self.elayers.parameters(), 2)
+            torch.cuda.empty_cache()
+            optimizer.step()
+            optimizer.zero_grad()
+            torch.cuda.empty_cache()
+        # emb = self.model.get_emb(x, edge_index)
+        # print(edge_index.shape)
+        # sys.exit()
+        _, edge_mask = self.explain(x, edge_index, emb, 1, training=False, node_idx=new_node_idx, node_size = node_size, feature_dim = feature_dim)
+        related_preds = []
+        confidence = 0
+        sparsity = 1
+        origin = probs[label]
+        for i in range(len(explanation_confidence)):
+            if confidence >= explanation_confidence[i]:
+                related_preds.append({'sparsity': sparsity})
+                continue
+            while confidence < explanation_confidence[i]:
+                k = int((1- sparsity)*edge_mask.shape[0])
+
+                # selected_nodes = calculate_selected_nodes(data1, edge_mask, k)
+                # maskout_nodes_list = [node for node in range(data1.x.shape[0]) if node not in selected_nodes]
+                # value_func = GnnNets_NC2value_func(self.model,
+                #                                    node_idx=new_node_idx,
+                #                                    target_class=label)
+
+                ones = torch.topk(edge_mask, k= k, dim=0)
+                mask = torch.zeros_like(edge_mask)
+                mask[ones.indices] = 1
+                self.__clear_masks__()
+                self.__set_masks__(x, edge_index, mask)
+                masked_pred = self.model(x, edge_index)
+                masked_pred = F.softmax(masked_pred, dim=-1)[new_node_idx].squeeze()[label]
+                self.__clear_masks__()
+                confidence = 1 - torch.abs(origin - masked_pred)/origin
+                if confidence >= explanation_confidence[i]:
+                    related_preds.append({'sparsity': sparsity})
+                    break
+                else:
+                    sparsity -= 0.01
+                    if sparsity < 0:
+                        sparsity = 0
+        # maskout_pred = gnn_score(maskout_nodes_list, data1, value_func,
+        #                         subgraph_building_method='zero_filling')
+        # masked_pred = gnn_score(selected_nodes, data1, value_func,
+        #                       subgraph_building_method='zero_filling')
+
+
+        # sparsity_score = k/edge_mask.shape[0]
+
+    # return variables
+        pred_mask = [edge_mask.detach()]
+        return None, pred_mask, related_preds
     def __repr__(self):
         return f'{self.__class__.__name__}()'

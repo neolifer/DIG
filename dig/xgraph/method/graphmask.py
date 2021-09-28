@@ -527,34 +527,34 @@ class GraphMaskExplainer(torch.nn.Module):
         self.model.set_get_vertex(False)
         for layer in reversed(list(range(len(self.model.convs)))):
             self.graphmask.enable_layer(layer)
-        duration = 0.0
-        if layer == 0:
-            self.epoch += 300
-        for epoch in range(self.epoch):
-            # for epoch in range(self.epoch):
+            duration = 0.0
             if layer == 0:
-                my_lr_scheduler1.step()
-                my_lr_scheduler2.step()
+                self.epoch += 300
+            for epoch in range(self.epoch):
+                # for epoch in range(self.epoch):
+                if layer == 0:
+                    my_lr_scheduler1.step()
+                    my_lr_scheduler2.step()
 
-            gates, baselines, total_penalty = self.graphmask(self.model)
-            real_baseline = []
+                gates, baselines, total_penalty = self.graphmask(self.model)
+                real_baseline = []
 
-            for i in range(len(gates)):
-                if baselines[i].requires_grad == False:
-                    gates[i] = None
-                    real_baseline.append(None)
-                else:
-                    real_baseline.append(baselines[i])
-            logits = self.model(x,edge_index, gates)
-            pred = F.log_softmax(logits, dim=-1)
-            loss_temp = self.loss(pred[node_idx], real_pred[node_idx]) - real_loss
-            g = torch.relu(loss_temp - self.allowance).mean()
-            f = total_penalty*self.penalty_scaling
-            loss2 = lagrangian_optimization.update(f, self.entropy_scale*g, self.graphmask)
-            for i in range(len(gates)):
-                if self.graphmask.baselines[i].requires_grad == True:
-                    print(f'layer{i}:',torch.sum(gates[i].detach()/gates[i].shape[-1], dim=-1),total_penalty)
-            print(f'Layer: {layer} Epoch: {epoch} | Loss: {g}')
+                for i in range(len(gates)):
+                    if baselines[i].requires_grad == False:
+                        gates[i] = None
+                        real_baseline.append(None)
+                    else:
+                        real_baseline.append(baselines[i])
+                logits = self.model(x,edge_index, gates)
+                pred = F.log_softmax(logits, dim=-1)
+                loss_temp = self.loss(pred[node_idx], real_pred[node_idx]) - real_loss
+                g = torch.relu(loss_temp - self.allowance).mean()
+                f = total_penalty*self.penalty_scaling
+                loss2 = lagrangian_optimization.update(f, self.entropy_scale*g, self.graphmask)
+        for i in range(len(gates)):
+            if self.graphmask.baselines[i].requires_grad == True:
+                print(f'layer{i}:',torch.sum(gates[i].detach()/gates[i].shape[-1], dim=-1),total_penalty)
+        print(f'Layer: {layer} Epoch: {epoch} | Loss: {g}')
         self.graphmask.eval()
         gates, baselines, total_penalty = self.graphmask(self.model, training = False)
         origin = probs[label]
