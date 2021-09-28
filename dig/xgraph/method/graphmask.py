@@ -267,30 +267,31 @@ class GraphMaskExplainer(torch.nn.Module):
         with torch.no_grad():
             self.model.eval()
 
-            try:
-                datalist = torch.load(f'checkpoints/graphmask_sub/graphmask_{dataset_name}_sub_train.pt')
-            except:
-                datalist = []
+            # try:
+            #     datalist = torch.load(f'checkpoints/graphmask_sub/graphmask_{dataset_name}_sub_train.pt')
+            # except:
+            datalist = []
                 # large_index = pk.load(open('large_subgraph_bacom.pk','rb'))['node_idx']
                 # motif = pk.load(open('Ba_Community_motif.plk','rb'))
                 # explain_node_index_list = list(set(large_index).intersection(set(motif.keys())))
                 # explain_node_index_list = torch.where(data.x)[0]
                 # explain_node_index_list = list(range(len(data.train_mask)))
-                explain_node_index_list = torch.where(data.test_mask)[0]
-                probs = []
-                sizes = []
-                for node_idx in tqdm.tqdm(explain_node_index_list):
-                    # for node_idx in explain_node_index_list:
-                    x, edge_index, y, subset, _ = \
-                        self.get_subgraph(node_idx=node_idx, x=data.x, edge_index=data.edge_index, y=data.y)
-                    new_node_idx = torch.where(subset == node_idx)[0]
-                    datalist.append(Temp_data(x = x.cpu(), edge_index = edge_index.cpu(), node_index = torch.LongTensor([new_node_idx]).cpu()))
-                torch.save(datalist,f'checkpoints/graphmask_sub/graphmask_{dataset_name}_sub_train.pt')
+            explain_node_index_list = torch.where(data.test_mask)[0]
+            explain_node_index_list = pk.load(open(f'{dataset_name}_exclude_nodes.pk','rb'))
+            probs = []
+            sizes = []
+            for node_idx in tqdm.tqdm(explain_node_index_list):
+                # for node_idx in explain_node_index_list:
+                x, edge_index, y, subset, _ = \
+                    self.get_subgraph(node_idx=node_idx, x=data.x, edge_index=data.edge_index, y=data.y)
+                new_node_idx = torch.where(subset == node_idx)[0]
+                datalist.append(Temp_data(x = x.cpu(), edge_index = edge_index.cpu(), node_index = torch.LongTensor([new_node_idx]).cpu()))
+                # torch.save(datalist,f'checkpoints/graphmask_sub/graphmask_{dataset_name}_sub_train.pt')
             #     probs.append(F.softmax(self.model(x, edge_index)[new_node_idx], dim=-1).max(-1).values[0].cpu().data)
             #     sizes.append(edge_index.shape[-1])
             # return probs, sizes
-        explain_node_index_list = torch.where(data.test_mask)[0]
-        datalist = datalist = torch.load(f'checkpoints/graphmask_sub/graphmask_{dataset_name}_sub_train.pt')
+        # explain_node_index_list = torch.where(data.test_mask)[0]
+        # datalist = datalist = torch.load(f'checkpoints/graphmask_sub/graphmask_{dataset_name}_sub_train.pt')
         data = None
         loader = DataLoader(datalist, batch_size=self.batch_size, shuffle= True)
 

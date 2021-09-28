@@ -34,7 +34,7 @@ parser.add_argument('--num_layers', default=2)
 parser.add_argument('--shared_weights', default=False)
 parser.add_argument('--dropout', default=0.1)
 parser.add_argument('--dataset_dir', default='./datasets/')
-parser.add_argument('--dataset_name', default='Pubmed')
+parser.add_argument('--dataset_name', default='Cora')
 parser.add_argument('--epoch', default=1000)
 parser.add_argument('--save_epoch', default=10)
 parser.add_argument('--lr', default=0.01)
@@ -95,7 +95,7 @@ model.to(device)
 # ckpt_path = osp.join('checkpoints', 'ba_community', 'GM_GCN','GM_GCN_100_best.pth')
 # model.load_state_dict(torch.load(ckpt_path)['net'])
 
-ckpt_path = osp.join('checkpoints', 'pubmed', 'GM_GCN','GM_GCN_nopre_best.pth')
+ckpt_path = osp.join('checkpoints', 'cora', 'GM_GCN','GM_GCN_nopre_best.pth')
 model.load_state_dict(torch.load(ckpt_path)['net'])
 
 
@@ -123,10 +123,10 @@ GraphMask = GraphMaskAdjMatProbe(vertex_dims, message_dims, num_classes, hidden_
 model.cuda()
 GraphMask.cuda()
 allowance =  0.2
-penalty_scalings = [0.1]
+penalty_scalings = [0.01]
 # penalty_scalings = [10]
 entropy_scales = [1]
-allowances = [0.03, 0.1,0.05]
+allowances = [0.05]
 # allowances = [0.03]
 lr1s = [3e-3]
 lr2s = [1e-4]
@@ -137,7 +137,7 @@ data = dataset.data
 # motif = pk.load(open('Ba_Community_motif.plk','rb'))
 # explain_node_index_list = list(set(large_index).intersection(set(motif.keys())))
 explain_node_index_list = torch.where(data.test_mask)[0]
-
+explain_node_index_list = pk.load(open(f'{parser.dataset_name}_exclude_nodes.pk','rb'))
 # explain_node_index_list = list(range(len(data.train_mask)))
 # for penalty_scaling, entropy_scale, allowance,lr1, lr2 in tqdm.tqdm(product(penalty_scalings, entropy_scales,allowances, lr1s, lr2s),
 #                                                                      total = len(list(product(penalty_scalings, entropy_scales,allowances, lr1s, lr2s)))):
@@ -211,14 +211,14 @@ for penalty_scaling, entropy_scale, allowance,lr1, lr2 in product(penalty_scalin
     subgraphs = {}
     # explain_node_index_list = torch.where(data.test_mask)[0]
     # explain_node_index_list = torch.where(data.test_mask)[0]
-    try:
-        subgraphs = torch.load(f'checkpoints/graphmask_sub/graphmask_{parser.dataset_name}_sub_test.pt')
-    except:
-        for j, node_idx in tqdm.tqdm(enumerate(explain_node_index_list), total= len(explain_node_index_list)):
-            x, edge_index, y, subset, _ = explainer.get_subgraph(node_idx, data.x, data.edge_index,data.y)
-            subgraphs[j] = {'x':x.cpu(), 'edge_index':edge_index.cpu(), 'new_node_idx':torch.where(subset == node_idx)[0].cpu(), 'y':y}
-        torch.save(subgraphs,f'checkpoints/graphmask_sub/graphmask_{parser.dataset_name}_sub_test.pt')
-    subgraphs = torch.load(f'checkpoints/graphmask_sub/graphmask_{parser.dataset_name}_sub_test.pt')
+    # try:
+    #     subgraphs = torch.load(f'checkpoints/graphmask_sub/graphmask_{parser.dataset_name}_sub_test.pt')
+    # except:
+    for j, node_idx in tqdm.tqdm(enumerate(explain_node_index_list), total= len(explain_node_index_list)):
+        x, edge_index, y, subset, _ = explainer.get_subgraph(node_idx, data.x, data.edge_index,data.y)
+        subgraphs[j] = {'x':x.cpu(), 'edge_index':edge_index.cpu(), 'new_node_idx':torch.where(subset == node_idx)[0].cpu(), 'y':y}
+        # torch.save(subgraphs,f'checkpoints/graphmask_sub/graphmask_{parser.dataset_name}_sub_test.pt')
+    # subgraphs = torch.load(f'checkpoints/graphmask_sub/graphmask_{parser.dataset_name}_sub_test.pt')
     import pickle as pk
 
     for _ in range(1):

@@ -253,7 +253,7 @@ for coff_size, coff_ent, coff_pred, lr in product(coff_sizes, coff_ents, coff_pr
     explainer = PGExplainer(model, lr = lr, in_channels=3*dim_hidden,
                             device=device, explain_graph=False, epochs = 1000,
                             coff_size= coff_size, coff_ent= coff_ent, coff_pred = coff_pred, batch_size = batch_size).cuda()
-    explainer.train_explanation_network(data.cuda(), batch = batch)
+    # explainer.train_explanation_network(data.cuda(), batch = batch)
     # torch.save(explainer.state_dict(), 'checkpoints/explainer/cora/pgexplainer_gcn_sub_1000epoch_confirm_nopre.pt')
     # state_dict = torch.load('checkpoints/explainer/cora/pgexplainer_gcn_sub_1000epoch.pt')
     # # torch.cuda.empty_cache()
@@ -300,6 +300,7 @@ for coff_size, coff_ent, coff_pred, lr in product(coff_sizes, coff_ents, coff_pr
     c = []
     fidelitys = []
     sparsitys = []
+    sparsity_all = []
     while a < 1:
         c.append(a)
         a += b
@@ -308,22 +309,28 @@ for coff_size, coff_ent, coff_pred, lr in product(coff_sizes, coff_ents, coff_pr
     # motif = pk.load(open('Ba_Community_motif.plk','rb'))
     # data = dataset[0].to(explainer.device)
     data = dataset.data.to(explainer.device)
+    explain_node_index_list = torch.where(data.test_mask)[0]
     # explain_node_index_list = list(set(large_index).intersection(set(motif.keys())))
     subgraphs = {}
-    explain_node_index_list = torch.where(data.test_mask)[0]
-    with torch.no_grad():
-        for j, node_idx in tqdm(enumerate(explain_node_index_list), total= len(explain_node_index_list)):
-            x, edge_index, y, subset, _ = explainer.get_subgraph(node_idx=node_idx, x=data.x, edge_index=data.edge_index, y=data.y)
-            edge_index = add_remaining_self_loops(edge_index)[0]
-            emb = explainer.model.get_emb(x, edge_index)
-            new_node_idx = torch.where(subset == node_idx)[0]
-            col, row = edge_index
-            f1 = emb[col]
-            f2 = emb[row]
-            self_embed = emb[new_node_idx].repeat(f1.shape[0], 1)
-            f12self = torch.cat([f1, f2, self_embed], dim=-1)
-            subgraphs[j] = {'x':x.cpu(), 'edge_index':edge_index.cpu(), 'new_node_idx':new_node_idx.cpu(),
-                            'subset':subset, 'emb':f12self.cpu(), 'node_size': emb.shape[0], 'feature_dim':emb.shape[-1]}
+    try:
+        subgraphs = torch.load(f'checkpoints/pgexplainer_sub/pgexplainer_{parser.dataset_name}_sub_test.pt')
+    except:
+
+        with torch.no_grad():
+            for j, node_idx in tqdm(enumerate(explain_node_index_list), total= len(explain_node_index_list)):
+                x, edge_index, y, subset, _ = explainer.get_subgraph(node_idx=node_idx, x=data.x, edge_index=data.edge_index, y=data.y)
+                edge_index = add_remaining_self_loops(edge_index)[0]
+                emb = explainer.model.get_emb(x, edge_index)
+                new_node_idx = torch.where(subset == node_idx)[0]
+                col, row = edge_index
+                f1 = emb[col]
+                f2 = emb[row]
+                self_embed = emb[new_node_idx].repeat(f1.shape[0], 1)
+                f12self = torch.cat([f1, f2, self_embed], dim=-1)
+                subgraphs[j] = {'x':x.cpu(), 'edge_index':edge_index.cpu(), 'new_node_idx':new_node_idx.cpu(),
+                                'subset':subset, 'emb':f12self.cpu(), 'node_size': emb.shape[0], 'feature_dim':emb.shape[-1]}
+        torch.save(subgraphs, f'checkpoints/pgexplainer_sub/pgexplainer_{parser.dataset_name}_sub_test.pt')
+    subgraphs = torch.load(f'checkpoints/pgexplainer_sub/pgexplainer_{parser.dataset_name}_sub_test.pt')
 
 
     data = None
@@ -332,12 +339,16 @@ for coff_size, coff_ent, coff_pred, lr in product(coff_sizes, coff_ents, coff_pr
             # indices = list(set(large_index).intersection(set(motif.keys())))
             spars = [0 for _ in range(len(c))]
             for j, node_idx in tqdm(enumerate(explain_node_index_list), total = len(explain_node_index_list)):
+                torch.manual_seed(42)
+                random.seed(0)
+                np.random.seed(0)
+                explainer = PGExplainer(model, lr = lr, in_channels=3*dim_hidden,
+                                        device=device, explain_graph=False, epochs = 1000,
+                                        coff_size= coff_size, coff_ent= coff_ent, coff_pred = coff_pred, batch_size = batch_size).cuda()
                 # print(f'explain graph {i} node {node_idx}')
-
                 subgraph = subgraphs[j]
-
-                walks, masks, related_preds= \
-                    explainer(emb = subgraph['emb'],explanation_confidence = c, node_idx=node_idx,
+                related_preds= \
+                    explainer.train_explain_single(emb = subgraph['emb'],explanation_confidence = c, node_idx=node_idx,
                               x = subgraph['x'], edge_index = subgraph['edge_index'], new_node_idx = subgraph['new_node_idx'],
                               subset = subgraph['subset'], node_size = subgraph['node_size'],
                               feature_dim = subgraph['feature_dim'])
@@ -361,8 +372,9 @@ for coff_size, coff_ent, coff_pred, lr in product(coff_sizes, coff_ents, coff_pr
                 best_parameters = [coff_size, coff_ent, coff_pred, lr]
             print(f'Explanation_Confidence: {c[i]:.2f}\n'
                   f'Sparsity: {sparsity:.4f}')
+            sparsity_all.append(sparsity)
 
-print(sparsitys)
+print(sparsity_all)
 # print(best_fidelity, best_parameters)
 #
 # print('fidelity: ',fidelitys, '\ninv_fidelity: ',inv_fidelitys)

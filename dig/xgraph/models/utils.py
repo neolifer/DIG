@@ -7,7 +7,7 @@ Author: Shurui Gui
 """
 import torch
 from torch_geometric.utils.num_nodes import maybe_num_nodes
-
+from queue import PriorityQueue
 
 
 
@@ -197,6 +197,5 @@ class LagrangianOptimization:
         elif self.alpha.item() > 30:
             self.alpha.data = torch.full_like(self.alpha.data, 30)
         return loss
-
 
 
