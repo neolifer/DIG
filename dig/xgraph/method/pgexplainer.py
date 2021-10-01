@@ -931,7 +931,7 @@ class PGExplainer(nn.Module):
             loss_tmp.backward()
             torch.nn.utils.clip_grad_value_(self.elayers.parameters(), 2)
             optimizer.step()
-        print(f'Epoch: {epoch} | pred Loss: {pred_loss_tmp.detach()}| size loss :{size_loss_temp.detach()}')
+        # print(f'Epoch: {epoch} | pred Loss: {pred_loss_tmp.detach()}| size loss :{size_loss_temp.detach()}')
         # emb = self.model.get_emb(x, edge_index)
         # print(edge_index.shape)
         # sys.exit()
