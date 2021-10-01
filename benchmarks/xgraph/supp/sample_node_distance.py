@@ -16,7 +16,7 @@ parser = parser.parse_args()
 dataset = Planetoid('./datasets', parser.dataset_name,split="public", transform = T.NormalizeFeatures())
 
 G = pyg.utils.to_networkx(dataset[0])
-# distance_pair = {}
+distance_pair = {}
 # for start in tqdm(G.nodes):
 #     for end in G.nodes:
 #         if start == end:
@@ -36,11 +36,11 @@ while True:
     for e in all:
         for n in nl:
             if (e,n) in distance_pair:
-                if distance_pair[(e, n)] > 2:
+                if distance_pair[(e, n)] <= 2:
                     to_be_removed.add(e)
                     continue
             if (n, e) in distance_pair:
-                if distance_pair[(n, e)] > 2:
+                if distance_pair[(n, e)] <= 2:
                     to_be_removed.add(e)
                     continue
     all = all - to_be_removed
@@ -49,6 +49,14 @@ while True:
     print(len(all))
     if len(all) == 0:
         break
-pk.dump(nl, open(f'{parser.dataset_name}_within_nodes.pk','wb'))
+pk.dump(nl, open(f'{parser.dataset_name}_exclude_nodes.pk','wb'))
+# distances = []
+# nl = pk.load(open(f'{parser.dataset_name}_exclude_nodes.pk','rb'))
+# for start in tqdm(nl):
+#     for end in nl:
+#         if (start, end) in distance_pair:
+#             distances.append(distance_pair[(start,end)])
+# print(min(distances))
+
 
 

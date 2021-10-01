@@ -397,7 +397,7 @@ class PGExplainer(nn.Module):
         self.coff_pred = coff_pred
         self.t0 = t0
         self.t1 = t1
-        self.loss = nn.NLLLoss(reduction='sum')
+        self.loss = nn.NLLLoss()
         self.num_hops = self.update_num_hops(num_hops)
         self.init_bias = 0.0
         self.batch_size = batch_size
@@ -476,11 +476,9 @@ class PGExplainer(nn.Module):
         # logit = prob[ori_pred]
         # logit = logit + EPS
         # pred_loss = - torch.log(logit)
-        prob = F.log_softmax(prob, dim = -1)
 
+        prob = F.log_softmax(prob, dim = -1)
         pred_loss = self.loss(prob, ori_pred)
-        # logit = F.log_softmax(prob, dim = -1)
-        # pred_loss = self.loss(logit.unsqueeze(0), ori_pred.unsqueeze(0))
         # size
         edge_mask = self.mask_sigmoid
         self.mask_sigmoid = None
@@ -619,7 +617,7 @@ class PGExplainer(nn.Module):
         # inverse the weights before sigmoid in MessagePassing Module
         # edge_mask = inv_sigmoid(edge_mask)
         self.__clear_masks__()
-
+        # edge_mask = torch.ones_like(edge_mask)
         self.__set_masks__(x, edge_index, edge_mask)
 
         # the model prediction with edge mask
@@ -905,7 +903,8 @@ class PGExplainer(nn.Module):
                              **kwargs):
         x = x.to(self.device)
         edge_index = edge_index.to(self.device)
-        emb = emb.to(self.device)
+        emb = emb.to(self.device).detach()
+        new_node_index = new_node_idx
         self.model.eval()
         edge_index = add_remaining_self_loops(edge_index)[0]
         with torch.no_grad():
@@ -914,13 +913,14 @@ class PGExplainer(nn.Module):
             probs = probs.squeeze()
         label = probs.argmax(-1)
         optimizer = Adam(self.elayers.parameters(), lr=self.lr)
+
         self.elayers.train()
+
         for epoch in range(self.epochs):
-            torch.cuda.empty_cache()
+
             optimizer.zero_grad()
             tmp = 1
-            real_pred = logits.argmax(-1).to('cuda:0')
-            new_node_index = new_node_idx.to('cuda:0')
+            real_pred = logits.argmax(-1).to('cuda:0').detach()
             node_size = emb.shape[0]
             feature_dim = emb.shape[1]
             # pred, _ = self.explain(x, edge_index, emb, tmp, training=True, node_idx=new_node_index)
@@ -928,12 +928,10 @@ class PGExplainer(nn.Module):
             # sys.exit()
             loss_tmp, pred_loss_tmp, size_loss_temp = self.__loss__(pred[new_node_index], real_pred[new_node_index])
             # print(pred_loss_tmp.detach().item())
-            torch.cuda.empty_cache()
             loss_tmp.backward()
             torch.nn.utils.clip_grad_value_(self.elayers.parameters(), 2)
-            torch.cuda.empty_cache()
             optimizer.step()
-            optimizer.zero_grad()
+        print(f'Epoch: {epoch} | pred Loss: {pred_loss_tmp.detach()}| size loss :{size_loss_temp.detach()}')
         # emb = self.model.get_emb(x, edge_index)
         # print(edge_index.shape)
         # sys.exit()

@@ -101,140 +101,14 @@ ckpt_path = osp.join('checkpoints', 'cora', 'GM_GCN','GM_GCN_nopre_best.pth')
 # ckpt_path = osp.join('checkpoints', 'cora', 'GM_GCN2','GCN2_best.pth')
 model.load_state_dict(torch.load(ckpt_path)['net'])
 model.to(device)
-# model = GAT_mask(num_layers, dim_node, 300, num_classes, heads = [7,4,1])
-# ckpt_path = osp.join('checkpoints', 'ba_community', 'GAT','GAT_100_best.pth')
-# model.load_state_dict(torch.load(ckpt_path)['net'])
-# model.to(device)
-# dim_hidden = 300
-# model = GCN_2l_mask(model_level='node', dim_node=dim_node, dim_hidden=300, num_classes=num_classes)
-# model.to(device)
-# check_checkpoints()
-# ckpt_path = osp.join('checkpoints', 'ba_shapes', 'GCN_2l', '0', 'GCN_2l_best.ckpt')
-# model.load_state_dict(torch.load(ckpt_path)['state_dict'])
-# ckpt_path = osp.join('checkpoints', 'ba_community', 'GCN2','GCN2_best.pth')
-# ckpt_path = osp.join('checkpoints', 'ba_community', 'GCN_2l', '0', 'GCN_2l_best.ckpt')
-# model.load_state_dict(torch.load(ckpt_path)['state_dict'])
-# coff_size: 0.01
-# coff_ent: 0.5
-# coff_pred: 5 fidelity:0.16 tensor(0.1502) [0.04, 1.0, 1]
-# coff_size: 0.035
-# coff_ent: 0.5
-# coff_pred: 1
-# Fidelity: 0.1652
-# coff_size: 0.033
-# coff_ent: 2
-# coff_pred: 1.5
-# Fidelity: 0.2849
-# Sparsity: 0.9605
-# lr: 0.001
 
-
-def find_motif(edge_index, node_idx, y, reserve):
-    for i in range(edge_index.shape[-1]):
-        if edge_index[0][i] == node_idx:
-            if y[node_idx] in [1,2,3]:
-                if y[edge_index[1][i]] in [1,2,3]:
-                    if i not in reserve:
-                        reserve.add(i)
-                        reserve = reserve.union(find_motif(edge_index, edge_index[1][i], y, reserve))
-            elif y[node_idx] in [5,6,7]:
-                if y[edge_index[1][i]] in [5,6,7]:
-                    if i not in reserve:
-                        reserve.add(i)
-                        reserve = reserve.union(find_motif(edge_index, edge_index[1][i], y, reserve))
-        elif edge_index[1][i] == node_idx:
-            if y[node_idx] in [1,2,3]:
-                if y[edge_index[0][i]] in [1,2,3]:
-                    if i not in reserve:
-                        reserve.add(i)
-                        reserve = reserve.union(find_motif(edge_index, edge_index[0][i], y, reserve))
-            elif y[node_idx] in [5,6,7]:
-                if y[edge_index[0][i]] in [5,6,7]:
-                    if i not in reserve:
-                        reserve.add(i)
-                        reserve = reserve.union(find_motif(edge_index, edge_index[0][i], y, reserve))
-    return reserve
-try:
-    motif = pk.load(open('Ba_Community_motif.plk','rb'))
-except:
-    data = dataset.data
-#     motif = {}
-#
-#     for node_idx in tqdm(torch.where(((data.y != 0).int()) + ((data.y !=4).int()) == 2)[0].tolist()):
-#         tmp = list(find_motif(data.edge_index, node_idx, data.y, set()))
-#         if len(tmp) == 12:
-#             motif[node_idx] = tmp
-#     pk.dump(motif, open('Ba_shapes_motif.plk','wb'))
-#     sys.exit()
-# correct = 0
-# fidelity = 0
-# for i, node_idx in tqdm(enumerate(motif.keys()), total= len(list(motif.keys()))):
-#     data = dataset.data
-#     edge_index = data.edge_index[:,motif[node_idx]]
-#     x_set = set()
-#     x_set = x_set.union(set(edge_index[0,:]))
-#     x_set = x_set.union(set(edge_index[1,:]))
-#     x_set_r = set()
-#     for e in x_set:
-#             x_set_r.add(e.item())
-#     # print(x_set_r)
-#     # continue
-#     # print(data.y[list(x_set_r)])
-#     # continue
-#     node_color = ['orange', 'red', 'green', 'blue', 'maroon', 'brown', 'darkslategray', 'paleturquoise']
-#     colors = [node_color[i] for i in data.y[sorted(list(x_set_r))]]
-#     # print(colors, node_idx)
-#     # continue
-#     # if node_idx != 350:
-#     #     continue
-#     # print(colors, node_idx)
-#     # print(data.y[node_idx])
-#     # sys.exit()
-#     G = nx.Graph()
-#     G.add_nodes_from(torch.unique(edge_index[0]).tolist())
-#     for i, (u, v) in enumerate(edge_index.t().tolist()):
-#         G.add_edge(u, v)
-#     graph = G
-#     pos = nx.kamada_kawai_layout(graph)
-#     nx.draw_networkx_nodes(graph, pos,
-#                            nodelist=list(graph.nodes()),
-#                            node_color=colors,
-#                            node_size=60)
-#     # print(colors)
-#     nx.draw_networkx_edges(graph, pos, width=1, edge_color='black', arrows=False)
-#     node_idx_color = [node_color[data.y[node_idx]] ]
-#     # print(node_idx_color)
-#     nx.draw_networkx_nodes(graph, pos=pos,
-#                            nodelist=[node_idx],
-#                            node_color=node_idx_color,
-#                            node_size=200)
-#
-#     plt.axis('off')
-#     plt.savefig(f'fig/motifs/{node_idx}.jpg')
-#     plt.show()
-# sys.exit()
-#     for e in x_set:
-#         x_set_r.add(e.item())
-#     with torch.no_grad():
-#         a = model(data.x.cuda(), data.edge_index.cuda())[node_idx]
-#         b = model(data.x.cuda(), edge_index.cuda())[node_idx]
-#     if a.argmax(-1) == b.argmax(-1):
-#         correct += 1
-#     fidelity += abs(F.softmax(a, -1)[a.argmax(-1)]-F.softmax(b, -1)[a.argmax(-1)])
-# #     print(a-b, F.softmax(model(data.x.cuda(), data.edge_index.cuda())[node_idx], dim = -1).argmax(-1), F.softmax(model(data.x.cuda(), edge_index.cuda())[node_idx], dim = -1).argmax(-1), data.y[node_idx])
-# #     if a - b > 0.5:
-# #         print(edge_index, data.y[list(x_set_r)])
-# #         sys.exit()
-# print('correct:',correct/(i+1))
-# print('inv_fidelity:',fidelity/(i+1))
-# sys.exit()
 torch.backends.cudnn.benchmark = True
 
 # tensor(0.1331) [0.34, 1, 1.5, 0.001]
 # tensor(0.1334) [0.3, 2.5, 1, 0.001]
 batch_size = 1
-coff_sizes = [6e-3]
-coff_ents = [0.5]
+coff_sizes = [2.2e-3, 2e-3, 1.5e-3, 1e-3]
+coff_ents = [1]
 coff_preds = [2]
 lrs = [0.003]
 
@@ -253,48 +127,8 @@ for coff_size, coff_ent, coff_pred, lr in product(coff_sizes, coff_ents, coff_pr
     explainer = PGExplainer(model, lr = lr, in_channels=3*dim_hidden,
                             device=device, explain_graph=False, epochs = 1000,
                             coff_size= coff_size, coff_ent= coff_ent, coff_pred = coff_pred, batch_size = batch_size).cuda()
-    # explainer.train_explanation_network(data.cuda(), batch = batch)
-    # torch.save(explainer.state_dict(), 'checkpoints/explainer/cora/pgexplainer_gcn_sub_1000epoch_confirm_nopre.pt')
-    # state_dict = torch.load('checkpoints/explainer/cora/pgexplainer_gcn_sub_1000epoch.pt')
-    # # torch.cuda.empty_cache()
-    # model = GCN_mask(num_layers, dim_node, dim_hidden, num_classes)
-    # ckpt_path = osp.join('checkpoints', 'cora', 'GM_GCN','GM_GCN_best.pth')
-    # model.load_state_dict(torch.load(ckpt_path)['net'])
-    # model.to(device)
-
-    # explainer = PGExplainer(model, lr = lr, in_channels=3*dim_hidden,
-    #                         device=device, explain_graph=False, num_hops = 2, epochs = 100,
-    #                         coff_size= coff_size, coff_ent= coff_ent, coff_pred = coff_pred, batch_size = batch_size).cuda()
-    # state_dict = torch.load('checkpoints/explainer/cora/pgexplainer_gcn_sub_1000epoch_confirm.pt')
-    # explainer.load_state_dict(state_dict)
-
-
-
-    # node_indices = torch.where(((data.y != 0).int()) + ((data.y !=4).int()) == 2)[0].tolist()
-    # from dig.xgraph.method.pgexplainer import PlotUtils
-    # plotutils = PlotUtils(dataset_name='ba_community')
-    # with torch.no_grad():
-    #     emb = explainer.model.get_emb(data.x, data.edge_index)
-    # node_idx = 328
-    # walks, masks, related_preds = \
-    #             explainer(data, emb, node_idx=node_idx, y=data.y, top_k=6, sparsity = 0.5)
-    #
-    # explainer.visualization(data, edge_mask=masks[0], top_k=6, plot_utils=plotutils, node_idx=node_idx, vis_name = f'fig/pgexplainer_bacom_gcn100/pgexplainer_bacom_gcn100{node_idx}.pdf')
-    # sys.exit()
-    # for i in range(len(node_indices)):
-    #     explainer = explainer.cuda()
-    #     explainer.model = explainer.model.cuda()
-    #     data=data.cuda()
-    #     node_idx = node_indices[i]
-    #     walks, masks, related_preds = \
-    #         explainer(data, node_idx=node_idx, y=data.y, top_k=6)
-    #     explainer.visualization(data, edge_mask=masks[0], top_k=6, plot_utils=plotutils, node_idx=node_idx, vis_name = f'fig/pgexplainer_bacom_gcn{node_idx}.pdf')
-    # sys.exit()
-
-
-
     ## Run explainer on the given model and dataset
-    explainer.eval()
+
     a = 0.5
     b = 0.05
     c = []
@@ -331,34 +165,32 @@ for coff_size, coff_ent, coff_pred, lr in product(coff_sizes, coff_ents, coff_pr
                                 'subset':subset, 'emb':f12self.cpu(), 'node_size': emb.shape[0], 'feature_dim':emb.shape[-1]}
         torch.save(subgraphs, f'checkpoints/pgexplainer_sub/pgexplainer_{parser.dataset_name}_sub_test.pt')
     subgraphs = torch.load(f'checkpoints/pgexplainer_sub/pgexplainer_{parser.dataset_name}_sub_test.pt')
-
-
-    data = None
+    # print(explainer.elayers[0](subgraphs[0]['emb'].cuda()).grad_fn)
+    # sys.exit()
     for _ in range(1):
-        with torch.no_grad():
-            # indices = list(set(large_index).intersection(set(motif.keys())))
-            spars = [0 for _ in range(len(c))]
-            for j, node_idx in tqdm(enumerate(explain_node_index_list), total = len(explain_node_index_list)):
-                torch.manual_seed(42)
-                random.seed(0)
-                np.random.seed(0)
-                explainer = PGExplainer(model, lr = lr, in_channels=3*dim_hidden,
-                                        device=device, explain_graph=False, epochs = 1000,
-                                        coff_size= coff_size, coff_ent= coff_ent, coff_pred = coff_pred, batch_size = batch_size).cuda()
-                # print(f'explain graph {i} node {node_idx}')
-                subgraph = subgraphs[j]
-                related_preds= \
-                    explainer.train_explain_single(emb = subgraph['emb'],explanation_confidence = c, node_idx=node_idx,
-                              x = subgraph['x'], edge_index = subgraph['edge_index'], new_node_idx = subgraph['new_node_idx'],
-                              subset = subgraph['subset'], node_size = subgraph['node_size'],
-                              feature_dim = subgraph['feature_dim'])
-                # print(related_preds)
-                # sys.exit()
-                for i in range(len(c)):
-                    spars[i] += related_preds[i]['sparsity']
+        # indices = list(set(large_index).intersection(set(motif.keys())))
+        spars = [0 for _ in range(len(c))]
+        for j, node_idx in tqdm(enumerate(explain_node_index_list), total = len(explain_node_index_list)):
+            torch.manual_seed(42)
+            random.seed(0)
+            np.random.seed(0)
+            explainer = PGExplainer(model, lr = lr, in_channels=3*dim_hidden,
+                                    device=device, explain_graph=False, epochs = 1000,
+                                    coff_size= coff_size, coff_ent= coff_ent, coff_pred = coff_pred, batch_size = batch_size).cuda()
+            # print(f'explain graph {i} node {node_idx}')
+            subgraph = subgraphs[j]
+            related_preds= \
+                explainer.train_explain_single(emb = subgraph['emb'],explanation_confidence = c, node_idx=node_idx,
+                          x = subgraph['x'], edge_index = subgraph['edge_index'], new_node_idx = subgraph['new_node_idx'],
+                          subset = subgraph['subset'], node_size = subgraph['node_size'],
+                          feature_dim = subgraph['feature_dim'])
+            # print(related_preds)
+            # sys.exit()
+            for i in range(len(c)):
+                spars[i] += related_preds[i]['sparsity']
 
-                # if you only have the edge masks without related_pred, please feed sparsity controlled mask to
-                # obtain the result: x_processor(data, masks, x_collector)
+            # if you only have the edge masks without related_pred, please feed sparsity controlled mask to
+            # obtain the result: x_processor(data, masks, x_collector)
         for i in range(len(c)):
             sparsity = spars[i]/(j + 1)
             sparsitys.append(sparsity)

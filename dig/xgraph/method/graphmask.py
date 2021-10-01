@@ -66,8 +66,8 @@ class HardConcrete(torch.nn.Module):
         if self.training:
             u = torch.empty_like(input_element).uniform_(1e-6, 1.0-1e-6)
 
-            # s = sigmoid((input_element) / self.temp)
-            s = sigmoid((torch.log(u) - torch.log(1 - u) + input_element) / self.temp)
+            s = sigmoid((input_element) / self.temp)
+            # s = sigmoid((torch.log(u) - torch.log(1 - u) + input_element) / self.temp)
             penalty = sigmoid(input_element)
             # penalty = sigmoid(input_element - self.temp * self.gamma_zeta_ratio)
 
@@ -271,13 +271,14 @@ class GraphMaskExplainer(torch.nn.Module):
             #     datalist = torch.load(f'checkpoints/graphmask_sub/graphmask_{dataset_name}_sub_train.pt')
             # except:
             datalist = []
-                # large_index = pk.load(open('large_subgraph_bacom.pk','rb'))['node_idx']
-                # motif = pk.load(open('Ba_Community_motif.plk','rb'))
-                # explain_node_index_list = list(set(large_index).intersection(set(motif.keys())))
-                # explain_node_index_list = torch.where(data.x)[0]
-                # explain_node_index_list = list(range(len(data.train_mask)))
-            explain_node_index_list = torch.where(data.test_mask)[0]
-            explain_node_index_list = pk.load(open(f'{dataset_name}_exclude_nodes.pk','rb'))
+            large_index = pk.load(open('large_subgraph_bacom.pk','rb'))['node_idx']
+            motif = pk.load(open('Ba_Community_motif.plk','rb'))
+            explain_node_index_list = list(set(large_index).intersection(set(motif.keys())))
+            # explain_node_index_list = torch.where(data.x)[0]
+            # explain_node_index_list = list(range(len(data.train_mask)))
+            # explain_node_index_list = torch.where(data.test_mask)[0]
+            # explain_node_index_list = pk.load(open(f'{dataset_name}_within_nodes.pk','rb'))
+
             probs = []
             sizes = []
             for node_idx in tqdm.tqdm(explain_node_index_list):
@@ -336,7 +337,7 @@ class GraphMaskExplainer(torch.nn.Module):
                             real_baseline.append(baselines[i])
 
                     self.model.set_get_vertex(False)
-                    logits = self.model(x,edge_index, gates)
+                    logits = self.model(x,edge_index, gates, real_baseline)
                     pred = F.log_softmax(logits, dim=-1)
                     self.model.set_get_vertex(True)
                     # print(real_pred.shape, pred.shape)
@@ -442,7 +443,7 @@ class GraphMaskExplainer(torch.nn.Module):
                 mask = [torch.zeros_like(gates[i]) for i in range(len(gates))]
                 for k in range(len(gates)):
                     mask[k][ones[k].indices] = 1
-                masked_pred = self.set_mask(x, edge_index, mask, new_node_idx)[label]
+                masked_pred = self.set_mask(x, edge_index, mask, new_node_idx, baselines)[label]
                 confidence = 1 - torch.abs(origin - masked_pred)/origin
 
                 if confidence >= explanation_confidence[i]:
@@ -571,6 +572,7 @@ class GraphMaskExplainer(torch.nn.Module):
         confidence = 0
         explanation_confidence = c
         for i in range(len(explanation_confidence)):
+
             if confidence >= explanation_confidence[i]:
                 related_preds.append({
                     'explanation_confidence':explanation_confidence[i],
@@ -582,7 +584,7 @@ class GraphMaskExplainer(torch.nn.Module):
                 mask = [torch.zeros_like(gates[i]) for i in range(len(gates))]
                 for k in range(len(gates)):
                     mask[k][ones[k].indices] = 1
-                masked_pred = self.set_mask(x, edge_index, mask, new_node_idx)[label]
+                masked_pred = self.set_mask(x, edge_index, mask, new_node_idx, baselines)[label]
                 confidence = 1 - torch.abs(origin - masked_pred)/origin
 
                 if confidence >= explanation_confidence[i]:

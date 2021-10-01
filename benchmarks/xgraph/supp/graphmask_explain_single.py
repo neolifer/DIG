@@ -22,19 +22,19 @@ import seaborn
 from torch_geometric.datasets import CitationFull, Planetoid
 import torch_geometric.transforms as T
 import pickle as pk
-
+import numpy as np
 parser = argparse.ArgumentParser()
 parser.add_argument('--model', default='GCN2', dest='gnn models')
 parser.add_argument('--model_name', default='GCN2')
 parser.add_argument('--model_level', default='node')
-parser.add_argument('--dim_hidden', default=64)
+parser.add_argument('--dim_hidden', default=20)
 parser.add_argument('--alpha', default=0.1)
 parser.add_argument('--theta', default=0.5)
-parser.add_argument('--num_layers', default=2)
+parser.add_argument('--num_layers', default=3)
 parser.add_argument('--shared_weights', default=False)
 parser.add_argument('--dropout', default=0.1)
 parser.add_argument('--dataset_dir', default='./datasets/')
-parser.add_argument('--dataset_name', default='Pubmed')
+parser.add_argument('--dataset_name', default='Ba_Community')
 parser.add_argument('--epoch', default=1000)
 parser.add_argument('--save_epoch', default=10)
 parser.add_argument('--lr', default=0.01)
@@ -92,10 +92,10 @@ model = GM_GCN(n_layers = num_layers, input_dim = dim_node, hid_dim = dim_hidden
 # model = GM_GCN2(model_level, dim_node, dim_hidden, num_classes, alpha, theta, num_layers,
 #                 shared_weights)
 model.to(device)
-# ckpt_path = osp.join('checkpoints', 'ba_community', 'GM_GCN','GM_GCN_100_best.pth')
+ckpt_path = osp.join('checkpoints', 'ba_community', 'GM_GCN','GM_GCN_100_best.pth')
 # model.load_state_dict(torch.load(ckpt_path)['net'])
 
-ckpt_path = osp.join('checkpoints', 'pubmed', 'GM_GCN','GM_GCN_nopre_best.pth')
+# ckpt_path = osp.join('checkpoints', 'cora', 'GM_GCN','GM_GCN_nopre_best.pth')
 model.load_state_dict(torch.load(ckpt_path)['net'])
 
 
@@ -123,20 +123,21 @@ GraphMask = GraphMaskAdjMatProbe(vertex_dims, message_dims, num_classes, hidden_
 model.cuda()
 GraphMask.cuda()
 allowance =  0.2
-penalty_scalings = [0.003]
+penalty_scalings = [0.001]
 # penalty_scalings = [10]
 entropy_scales = [1]
-allowances = [0.03, 0.1,0.05]
+allowances = [0.05]
 # allowances = [0.03]
 lr1s = [3e-3]
 lr2s = [1e-4]
 best_parameters = None
 best_spar = 1
 data = dataset.data
-# large_index = pk.load(open('large_subgraph_bacom.pk','rb'))['node_idx']
-# motif = pk.load(open('Ba_Community_motif.plk','rb'))
+large_index = pk.load(open('large_subgraph_bacom.pk','rb'))['node_idx']
+motif = pk.load(open('Ba_Community_motif.plk','rb'))
 # explain_node_index_list = list(set(large_index).intersection(set(motif.keys())))
-sparsitys = []
+explain_node_index_list = motif.keys()
+
 subgraphs = {}
 a = 0.50
 b = 0.05
@@ -144,41 +145,47 @@ c = []
 while a < 1:
     c.append(a)
     a += b
-explain_node_index_list = torch.where(data.test_mask)[0]
-try:
-    subgraphs = torch.load(f'checkpoints/graphmask_sub/graphmask_{parser.dataset_name}_sub_test.pt')
-except:
-    for j, node_idx in tqdm.tqdm(enumerate(explain_node_index_list), total= len(explain_node_index_list)):
-        x, edge_index, y, subset, _ = explainer.get_subgraph(node_idx, data.x, data.edge_index,data.y)
-        subgraphs[j] = {'x':x.cpu(), 'edge_index':edge_index.cpu(), 'new_node_idx':torch.where(subset == node_idx)[0].cpu(), 'y':y}
-    torch.save(subgraphs,f'checkpoints/graphmask_sub/graphmask_{parser.dataset_name}_sub_test.pt')
-subgraphs = torch.load(f'checkpoints/graphmask_sub/graphmask_{parser.dataset_name}_sub_test.pt')
-for penalty_scaling, entropy_scale, allowance,lr1, lr2 in product(penalty_scalings, entropy_scales,allowances, lr1s, lr2s):
-    spars = [0 for _ in range(len(c))]
-    for j, node_idx in tqdm.tqdm(enumerate(explain_node_index_list), total= len(explain_node_index_list)):
-        import random
-        import numpy as np
-        torch.manual_seed(42)
-        random.seed(0)
-        np.random.seed(0)
-        subgraph = subgraphs[j]
+
+# explain_node_index_list = pk.load(open(f'{parser.dataset_name}_exclude_nodes.pk','rb'))
+for explain_node_index_list in [motif.keys(), list(set(large_index).intersection(set(motif.keys())))]:
+    for penalty_scaling, entropy_scale, allowance,lr1, lr2 in product(penalty_scalings, entropy_scales,allowances, lr1s, lr2s):
+        sparsitys = []
         explainer = GraphMaskExplainer(model, GraphMask, epoch = 100, penalty_scaling = penalty_scaling,
                                        entropy_scale = entropy_scale,allowance = allowance, lr1 =lr1, lr2= lr2, batch_size = len(explain_node_index_list))
-        related_preds = explainer.train_explain_single(
-                                                       x = subgraph['x'], edge_index = subgraph['edge_index'], new_node_idx = subgraph['new_node_idx'])
+        # try:
+        #     subgraphs = torch.load(f'checkpoints/graphmask_sub/graphmask_{parser.dataset_name}_sub_test.pt')
+        # except:
+        for j, node_idx in tqdm.tqdm(enumerate(explain_node_index_list), total= len(explain_node_index_list)):
+            x, edge_index, y, subset, _ = explainer.get_subgraph(node_idx, data.x, data.edge_index,data.y)
+            subgraphs[j] = {'x':x.cpu(), 'edge_index':edge_index.cpu(), 'new_node_idx':torch.where(subset == node_idx)[0].cpu(), 'y':y}
+        #     torch.save(subgraphs,f'checkpoints/graphmask_sub/graphmask_{parser.dataset_name}_sub_test.pt')
+        # subgraphs = torch.load(f'checkpoints/graphmask_sub/graphmask_{parser.dataset_name}_sub_test.pt')
+        spars = [0 for _ in range(len(c))]
+        for j, node_idx in tqdm.tqdm(enumerate(explain_node_index_list), total= len(explain_node_index_list)):
+            import random
+            import numpy as np
+            torch.manual_seed(42)
+            random.seed(0)
+            np.random.seed(0)
+            explainer = GraphMaskExplainer(model, GraphMask, epoch = 100, penalty_scaling = penalty_scaling,
+                                           entropy_scale = entropy_scale,allowance = allowance, lr1 =lr1, lr2= lr2, batch_size = len(explain_node_index_list))
+            subgraph = subgraphs[j]
+
+            related_preds = explainer.train_explain_single(
+                x = subgraph['x'], edge_index = subgraph['edge_index'], new_node_idx = subgraph['new_node_idx'])
+            for i in range(len(c)):
+                spars[i] += related_preds[i]['sparsity']
         for i in range(len(c)):
-            spars[i] += related_preds[i]['sparsity']
-    for i in range(len(c)):
-        sparsity = spars[i]/(j + 1)
-        # sparsity = spars/(j + 1)
-        sparsitys.append(sparsity)
-        if sparsity < best_spar:
-            best_parameters = [penalty_scaling, entropy_scale, allowance,lr1, lr2]
-            best_spar = sparsity
-        print(f'parameters:{[penalty_scaling, entropy_scale, allowance,lr1, lr2]}\n'
-              f'explanation_confidence: {c[i]:.2f}\n'
-              f'Sparsity: {sparsity:.4f}')
-    print('evaluation_confidence: ',c)
-    print('sparsity: ', sparsitys)
+            sparsity = spars[i]/(j + 1)
+            # sparsity = spars/(j + 1)
+            sparsitys.append(sparsity)
+            if sparsity < best_spar:
+                best_parameters = [penalty_scaling, entropy_scale, allowance,lr1, lr2]
+                best_spar = sparsity
+            print(f'parameters:{[penalty_scaling, entropy_scale, allowance,lr1, lr2]}\n'
+                  f'explanation_confidence: {c[i]:.2f}\n'
+                  f'Sparsity: {sparsity:.4f}')
+        print('evaluation_confidence: ',c)
+        print('sparsity: ', sparsitys)
 print('best parameters: ', best_parameters,
       '\nbest inverse fidelity:', best_spar)
