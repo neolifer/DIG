@@ -85,8 +85,8 @@ class HardConcrete(torch.nn.Module):
         if not training:
             return clipped_s, penalty
         #
-        hard_concrete = (clipped_s >= 0.5).float()
-        clipped_s = clipped_s + (hard_concrete - clipped_s).detach()
+        # hard_concrete = (clipped_s >= 0.5).float()
+        # clipped_s = clipped_s + (hard_concrete - clipped_s).detach()
 
         return clipped_s, penalty
 
@@ -192,7 +192,7 @@ class GraphMaskAdjMatProbe(torch.nn.Module):
 
 class GraphMaskExplainer(torch.nn.Module):
     def __init__(self, model, graphmask, epoch = 10, penalty_scaling = 0.5, entropy_scale = 1,
-                 allowance = 0.03, lr1 =3e-4, lr2 = 3e-3, num_hops = None, batch_size =  1):
+                 allowance = 0.03, lr1 =3e-4, lr2 = 3e-3, num_hops = None, batch_size =  1, use_baseline = False):
         super(GraphMaskExplainer, self).__init__()
         self.model = model
         self.graphmask = graphmask
@@ -207,7 +207,7 @@ class GraphMaskExplainer(torch.nn.Module):
         self.lr2 = lr2
         self.batch_size = batch_size
         self.num_hops = self.update_num_hops(num_hops)
-
+        self.use_baseline = use_baseline
     def update_num_hops(self, num_hops: int):
         if num_hops is not None:
             return num_hops
@@ -250,7 +250,7 @@ class GraphMaskExplainer(torch.nn.Module):
 
 
 
-    def train_graphmask(self, dataset, dataset_name):
+    def train_graphmask(self, dataset, dataset_name, explain_node_index_list):
 
 
         optimizer = Adam(self.graphmask.parameters(), lr=self.lr1, weight_decay=1e-5)
@@ -271,9 +271,9 @@ class GraphMaskExplainer(torch.nn.Module):
             #     datalist = torch.load(f'checkpoints/graphmask_sub/graphmask_{dataset_name}_sub_train.pt')
             # except:
             datalist = []
-            large_index = pk.load(open('large_subgraph_bacom.pk','rb'))['node_idx']
-            motif = pk.load(open('Ba_Community_motif.plk','rb'))
-            explain_node_index_list = list(set(large_index).intersection(set(motif.keys())))
+            # large_index = pk.load(open('large_subgraph_bacom.pk','rb'))['node_idx']
+            # motif = pk.load(open('Ba_Community_motif.plk','rb'))
+            # explain_node_index_list = list(set(large_index).intersection(set(motif.keys())))
             # explain_node_index_list = torch.where(data.x)[0]
             # explain_node_index_list = list(range(len(data.train_mask)))
             # explain_node_index_list = torch.where(data.test_mask)[0]
@@ -337,7 +337,10 @@ class GraphMaskExplainer(torch.nn.Module):
                             real_baseline.append(baselines[i])
 
                     self.model.set_get_vertex(False)
-                    logits = self.model(x,edge_index, gates, real_baseline)
+                    if self.use_baseline:
+                        logits = self.model(x,edge_index, gates, real_baseline)
+                    else:
+                        logits = self.model(x,edge_index, gates)
                     pred = F.log_softmax(logits, dim=-1)
                     self.model.set_get_vertex(True)
                     # print(real_pred.shape, pred.shape)
@@ -361,14 +364,14 @@ class GraphMaskExplainer(torch.nn.Module):
                     # # loss += loss_temp.detach().item()
                     # # print(real_pred[node_idx])
 
-                for i in range(len(gates)):
-                    if self.graphmask.baselines[i].requires_grad == True:
-                        print(f'layer{i}:',torch.sum(gates[i].detach()/gates[i].shape[-1], dim=-1),total_penalty)
+                # for i in range(len(gates)):
+                #     if self.graphmask.baselines[i].requires_grad == True:
+                #         print(f'layer{i}:',torch.sum(gates[i].detach()/gates[i].shape[-1], dim=-1),total_penalty)
 
                 duration += time.perf_counter() - tic
 
 
-                print(f'Layer: {layer} Epoch: {epoch} | Loss: {loss/(len(explain_node_index_list)/self.batch_size) }')
+                # print(f'Layer: {layer} Epoch: {epoch} | Loss: {loss/(len(explain_node_index_list)/self.batch_size) }')
 
                 # for i in reversed(list(range(3))):
                 #     writer.add_scalar(f'Gate{epoch}{i}/train', gates[i].sum().detach().item(), epoch)
@@ -443,7 +446,10 @@ class GraphMaskExplainer(torch.nn.Module):
                 mask = [torch.zeros_like(gates[i]) for i in range(len(gates))]
                 for k in range(len(gates)):
                     mask[k][ones[k].indices] = 1
-                masked_pred = self.set_mask(x, edge_index, mask, new_node_idx, baselines)[label]
+                if self.use_baseline:
+                    masked_pred = self.set_mask(x, edge_index, mask, new_node_idx,baselines)[label]
+                else:
+                    masked_pred = self.set_mask(x, edge_index, mask, new_node_idx)[label]
                 confidence = 1 - torch.abs(origin - masked_pred)/origin
 
                 if confidence >= explanation_confidence[i]:
@@ -547,7 +553,10 @@ class GraphMaskExplainer(torch.nn.Module):
                         real_baseline.append(None)
                     else:
                         real_baseline.append(baselines[i])
-                logits = self.model(x,edge_index, gates)
+                if self.use_baseline:
+                    logits = self.model(x,edge_index, gates, real_baseline)
+                else:
+                    logits = self.model(x,edge_index, gates)
                 pred = F.log_softmax(logits, dim=-1)
                 loss_temp = self.loss(pred[node_idx], real_pred[node_idx]) - real_loss
                 g = torch.relu(loss_temp - self.allowance).mean()
@@ -584,7 +593,10 @@ class GraphMaskExplainer(torch.nn.Module):
                 mask = [torch.zeros_like(gates[i]) for i in range(len(gates))]
                 for k in range(len(gates)):
                     mask[k][ones[k].indices] = 1
-                masked_pred = self.set_mask(x, edge_index, mask, new_node_idx, baselines)[label]
+                if self.use_baseline:
+                    masked_pred = self.set_mask(x, edge_index, mask, new_node_idx, baselines)[label]
+                else:
+                    masked_pred = self.set_mask(x, edge_index, mask, new_node_idx)[label]
                 confidence = 1 - torch.abs(origin - masked_pred)/origin
 
                 if confidence >= explanation_confidence[i]:

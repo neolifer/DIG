@@ -40,7 +40,7 @@ parser.add_argument('--num_layers', default=2)
 parser.add_argument('--shared_weights', default=False)
 parser.add_argument('--dropout', default=0.1)
 parser.add_argument('--dataset_dir', default='./datasets/')
-parser.add_argument('--dataset_name', default='Pubmed')
+parser.add_argument('--dataset_name', default='Cora')
 parser.add_argument('--epoch', default=1000)
 parser.add_argument('--save_epoch', default=10)
 parser.add_argument('--lr', default=0.01)
@@ -55,10 +55,13 @@ device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 
 
-if parser.dataset_name not in  ['Cora','Pubmed']:
+if parser.dataset_name not in  ['Cora','Pubmed','Citeseer']:
     dataset = get_dataset(parser)
 else:
-    dataset = Planetoid('./datasets', parser.dataset_name,split="public", transform = T.NormalizeFeatures())
+    if parser.model_name == 'GCN2':
+        dataset = Planetoid('./datasets', parser.dataset_name,split="public", transform = T.NormalizeFeatures())
+    else:
+        dataset = Planetoid('./datasets', parser.dataset_name,split="public")
 dataset.data.x = dataset.data.x.to(torch.float32)
 # dataset.data.x = dataset.data.x[:, :1]
 # dataset.data.y = dataset.data.y[:, 2]
@@ -79,12 +82,10 @@ def check_checkpoints(root='./'):
 
 
 model_level = parser.model_level
-
-dim_hidden = parser.dim_hidden
-
+dim_hidden = int(parser.dim_hidden)
 alpha = parser.alpha
 theta=parser.theta
-num_layers=parser.num_layers
+num_layers= int(parser.num_layers)
 shared_weights=parser.shared_weights
 dropout=parser.dropout
 
@@ -106,7 +107,7 @@ dropout=parser.dropout
 # ckpt_path = osp.join('checkpoints', 'cora', 'GM_GCN2','GCN2_best.pth')
 model = GM_GCN(num_layers, dim_node, dim_hidden, num_classes)
 # ckpt_path = osp.join('checkpoints', 'ba_community', 'GM_GCN','GM_GCN_100_best.pth')
-ckpt_path = osp.join('checkpoints', 'pubmed', 'GM_GCN','GM_GCN_nopre_best.pth')
+ckpt_path = osp.join('checkpoints', parser.dataset_name.lower(), f'GM_GCN',f'{parser.model_name}_best.pth')
 model.load_state_dict(torch.load(ckpt_path)['net'])
 from dig.xgraph.method import GNNExplainer
 # explainer = GNNExplainer(model, epochs=100, lr=0.01, explain_graph=False)
@@ -174,32 +175,41 @@ sparsitys = []
 
 for _ in range(1):
     # node_indices = list(set(large_index).intersection(set(motif.keys())))
-    data = dataset.data
+    data = dataset[0]
     # node_indices = list(set(large_index).intersection(set(motif.keys())))
     # node_indices = list(motif.keys())
-    node_indices = torch.where(data.test_mask)[0]
+    if parser.dataset_name == 'BA_Community' or parser.dataset_name == 'BA_shapes':
+        explain_node_index_list = pk.load(open(f'{parser.dataset_name}_explanation_node_list.pk','rb'))
+    else:
+        explain_node_index_list = [i for i in range(data.y.shape[0]) if data.y[i] != 0]
     spar = [0 for e in c]
-    for j, node_idx in tqdm(enumerate(node_indices), total = len(node_indices)):
+    no_count = 0
+    for j, node_idx in tqdm(enumerate(explain_node_index_list), total = len(explain_node_index_list)):
         import random
         import numpy as np
         torch.manual_seed(42)
         random.seed(0)
         np.random.seed(0)
         data.to(device)
-        _, _, _, mask, related_preds = \
-            explainer(data.x, data.edge_index, num_classes=num_classes, node_idx=node_idx,
-                      y = data.y, evaluation_confidence = c,control_sparsity = False)
+        explainer = GNNExplainer(model, epochs=1000, lr=0.01, explain_graph=False)
+        try:
+            _, _, _, mask, related_preds = \
+                explainer(data.x, data.edge_index, num_classes=num_classes, node_idx=node_idx,
+                          y = data.y, evaluation_confidence = c,control_sparsity = False)
+        except:
+            no_count += 1
+            continue
         for i in range(len(spar)):
             spar[i] += related_preds[i]
 for i in range(len(spar)):
-    sparsity = spar[i]/(j + 1)
+    sparsity = spar[i]/(j + 1 - no_count)
     sparsitys.append(sparsity)
     print('GCN:',f'Evaluation Confidence: {c[i]:.2f}\n'
           f'Sparsity: {sparsity:.4f}\n')
 
 
-temp = {'evaluation_confidence':c,
-        'sparsity':sparsitys}
+result = {'sparsity':sparsitys, 'method':'gnnexplainer'}
+pk.dump(result, open(f'results{result["method"]}.pk','wb'))
 print(sparsitys)
 # pk.dump(temp, open('results/bacom/gnnexplainer_gcn100_bacom_result.pk','wb'))
 # pk.dump({'node_idx':large_index}, open('large_subgraph_bacom.pk','wb'))

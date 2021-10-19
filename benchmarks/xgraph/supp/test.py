@@ -49,7 +49,7 @@ num_classes = dataset.num_classes
 model = GM_GCN(n_layers = num_layers, input_dim = dim_node, hid_dim = dim_hidden, n_classes = num_classes)
 
 model.to('cuda:0')
-ckpt_path = osp.join('checkpoints', 'cora', 'GM_GCN','GM_GCN_best.pth')
+ckpt_path = osp.join('checkpoints', 'cora', 'GM_GCN','GM_GCN_100_nopre_best.pth')
 
 model.load_state_dict(torch.load(ckpt_path)['net'])
 model.set_get_vertex(False)

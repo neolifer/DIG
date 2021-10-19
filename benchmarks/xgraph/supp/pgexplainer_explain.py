@@ -32,14 +32,14 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--model', default='GCN2', dest='gnn models')
 parser.add_argument('--model_name', default='GCN')
 parser.add_argument('--model_level', default='node')
-parser.add_argument('--dim_hidden', default=64)
+parser.add_argument('--dim_hidden', default=20)
 parser.add_argument('--alpha', default=0.1)
 parser.add_argument('--theta', default=0.5)
-parser.add_argument('--num_layers', default=2)
+parser.add_argument('--num_layers', default=3)
 parser.add_argument('--shared_weights', default=False)
 parser.add_argument('--dropout', default=0.1)
 parser.add_argument('--dataset_dir', default='./datasets/')
-parser.add_argument('--dataset_name', default='Cora')
+parser.add_argument('--dataset_name', default='BA_Community')
 parser.add_argument('--epoch', default=1000)
 parser.add_argument('--save_epoch', default=10)
 parser.add_argument('--lr', default=0.01)
@@ -52,11 +52,15 @@ device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 
 
-
-if parser.dataset_name != 'Cora':
+print(parser.dataset_name)
+print(parser.model_name)
+if parser.dataset_name not in  ['Cora','Pubmed','Citeseer']:
     dataset = get_dataset(parser)
 else:
-    dataset = Planetoid('./datasets', 'Cora',split="public", transform = T.NormalizeFeatures())
+    if parser.model_name == 'GCN2':
+        dataset = Planetoid('./datasets', parser.dataset_name,split="public", transform = T.NormalizeFeatures())
+    else:
+        dataset = Planetoid('./datasets', parser.dataset_name,split="public")
 # dim_node = dataset.num_node_features
 dataset.data.x = dataset.data.x.to(torch.float32)
 
@@ -82,22 +86,22 @@ def check_checkpoints(root='./'):
     os.unlink(path)
 model_level = parser.model_level
 
-dim_hidden = parser.dim_hidden
+dim_hidden = int(parser.dim_hidden)
 
 alpha = parser.alpha
 theta=parser.theta
-num_layers=parser.num_layers
+num_layers= int(parser.num_layers)
 shared_weights=parser.shared_weights
 dropout=parser.dropout
 batch = parser.batch
 # model = GCN2_mask(model_level, dim_node, dim_hidden, num_classes, alpha, theta, num_layers,
 #                    shared_weights, dropout)
 model = GM_GCN(n_layers = num_layers, input_dim = dim_node, hid_dim = dim_hidden, n_classes = num_classes)
-# ckpt_path = osp.join('checkpoints', 'ba_community', 'GM_GCN','GM_GCN_100_best.pth')
+ckpt_path = osp.join('checkpoints', parser.dataset_name.lower(), f'GM_GCN',f'{parser.model_name}_best.pth')
 
 # model = GM_GCN2(model_level, dim_node, dim_hidden, num_classes, alpha, theta, num_layers,
 #                 shared_weights)
-ckpt_path = osp.join('checkpoints', 'cora', 'GM_GCN','GM_GCN_nopre_best.pth')
+# ckpt_path = osp.join('checkpoints', 'cora', 'GM_GCN','GM_GCN_nopre_best.pth')
 # ckpt_path = osp.join('checkpoints', 'cora', 'GM_GCN2','GCN2_best.pth')
 model.load_state_dict(torch.load(ckpt_path)['net'])
 model.to(device)
@@ -233,12 +237,17 @@ torch.backends.cudnn.benchmark = True
 # tensor(0.1331) [0.34, 1, 1.5, 0.001]
 # tensor(0.1334) [0.3, 2.5, 1, 0.001]
 batch_size = 1
-coff_sizes = [6e-3]
-coff_ents = [0.5]
-coff_preds = [2]
+coff_sizes = [5e-3]
+coff_ents = [1]
+coff_preds = [1]
 lrs = [0.003]
-
-
+data = dataset.data
+if parser.dataset_name == 'BA_Community' or parser.dataset_name == 'BA_shapes':
+    explain_node_index_list = pk.load(open(f'{parser.dataset_name}_explanation_node_list.pk','rb'))
+elif parser.dataset_name in ['Cora','Pubmed','Citeseer']:
+    explain_node_index_list = torch.where(data.test_mask)[0]
+else:
+    explain_node_index_list = [i for i in range(data.y.shape[0])]
 
 best_spar = 0
 best_parameters = []
@@ -253,7 +262,7 @@ for coff_size, coff_ent, coff_pred, lr in product(coff_sizes, coff_ents, coff_pr
     explainer = PGExplainer(model, lr = lr, in_channels=3*dim_hidden,
                             device=device, explain_graph=False, epochs = 1000,
                             coff_size= coff_size, coff_ent= coff_ent, coff_pred = coff_pred, batch_size = batch_size).cuda()
-    explainer.train_explanation_network(data.cuda(), batch = batch)
+    explainer.train_explanation_network(data.cuda(), batch = batch, explain_node_index_list = explain_node_index_list)
     # torch.save(explainer.state_dict(), 'checkpoints/explainer/cora/pgexplainer_gcn_sub_1000epoch_confirm_nopre.pt')
     # state_dict = torch.load('checkpoints/explainer/cora/pgexplainer_gcn_sub_1000epoch.pt')
     # # torch.cuda.empty_cache()
@@ -309,8 +318,9 @@ for coff_size, coff_ent, coff_pred, lr in product(coff_sizes, coff_ents, coff_pr
     # data = dataset[0].to(explainer.device)
     data = dataset.data.to(explainer.device)
     # explain_node_index_list = list(set(large_index).intersection(set(motif.keys())))
+    # explain_node_index_list = pk.load(open(f'BA_Community_explanation_node_list.pk','rb'))
     subgraphs = {}
-    explain_node_index_list = torch.where(data.test_mask)[0]
+    # explain_node_index_list = torch.where(data.test_mask)[0]
     with torch.no_grad():
         for j, node_idx in tqdm(enumerate(explain_node_index_list), total= len(explain_node_index_list)):
             x, edge_index, y, subset, _ = explainer.get_subgraph(node_idx=node_idx, x=data.x, edge_index=data.edge_index, y=data.y)
@@ -354,14 +364,15 @@ for coff_size, coff_ent, coff_pred, lr in product(coff_sizes, coff_ents, coff_pr
             print('hyper parameters:\n'
                   f'coff_size: {coff_size}\n'
                   f'coff_ent: {coff_ent}\n'
-                  f'coff_pred: {coff_pred}')
+                  f'coff_pred: {coff_pred}\n'
+                  f'lr: {lr}')
 
             if sparsity > best_spar:
                 best_spar = sparsity
                 best_parameters = [coff_size, coff_ent, coff_pred, lr]
             print(f'Explanation_Confidence: {c[i]:.2f}\n'
                   f'Sparsity: {sparsity:.4f}')
-
+print(best_parameters)
 print(sparsitys)
 # print(best_fidelity, best_parameters)
 #

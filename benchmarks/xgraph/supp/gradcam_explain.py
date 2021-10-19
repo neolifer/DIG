@@ -119,7 +119,7 @@ dropout=parser.dropout
 # model.load_state_dict(torch.load(ckpt_path)['state_dict'])
 model = GM_GCN(num_layers, dim_node, dim_hidden, num_classes)
 # ckpt_path = osp.join('checkpoints', 'ba_community', 'GM_GCN','GM_GCN_100_best.pth')
-ckpt_path = osp.join('checkpoints', 'cora', 'GM_GCN','GM_GCN_best.pth')
+ckpt_path = osp.join('checkpoints', 'cora', 'GM_GCN','GM_GCN_100_nopre_best.pth')
 model.load_state_dict(torch.load(ckpt_path)['net'])
 model.to(device)
 # model = GAT(num_layers, dim_node, 300, num_classes, heads = [7,4,1])

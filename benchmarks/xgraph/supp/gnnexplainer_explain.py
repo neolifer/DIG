@@ -115,7 +115,7 @@ check_checkpoints()
 # model.load_state_dict(torch.load(ckpt_path)['state_dict'])
 # ckpt_path = osp.join('checkpoints', 'ba_shapes', 'GCN2','GCN2_best.pth')
 # ckpt_path = osp.join('checkpoints', 'ba_shapes', 'GCN_2l','GCN_2l_best.pth')
-ckpt_path = osp.join('checkpoints', 'ba_community', 'GM_GCN','GM_GCN_best.pth')
+ckpt_path = osp.join('checkpoints', 'ba_community', 'GM_GCN','GM_GCN_100_nopre_best.pth')
 model.load_state_dict(torch.load(ckpt_path)['net'])
 # from dig.xgraph.method import GNNExplainer
 

@@ -165,7 +165,6 @@ class GM_GCNconv(gnn.GCNConv):
                     edge_mask = self.__edge_mask__
                 # Some ops add self-loops to `edge_index`. We need to do the
                 # same for `edge_mask` (but do not train those).
-
                 if out.size(self.node_dim) != edge_mask.size(0):
                     loop = edge_mask.new_ones(size[0])
                     edge_mask = torch.cat([edge_mask, loop], dim=0)

@@ -57,6 +57,7 @@ class GNNExplainer(ExplainerBase):
             loss = self.loss(raw_preds[self.node_idx].unsqueeze(0), x_label.unsqueeze(0))
 
         m = self.edge_mask.sigmoid()
+        temp = loss.item()
         loss = loss + self.coeffs['edge_size'] * m.sum()
         ent = -m * torch.log(m + EPS) - (1 - m) * torch.log(1 - m + EPS)
         loss = loss + self.coeffs['edge_ent'] * ent.mean()
@@ -67,7 +68,7 @@ class GNNExplainer(ExplainerBase):
             ent = -m * torch.log(m + EPS) - (1 - m) * torch.log(1 - m + EPS)
             loss = loss + self.coeffs['node_feat_ent'] * ent.mean()
 
-        return loss
+        return loss, temp, m.sum().item()
 
     def gnn_explainer_alg(self,
                           x: Tensor,
@@ -93,13 +94,14 @@ class GNNExplainer(ExplainerBase):
             else:
                 h = x
             raw_preds = self.model(h, edge_index, **kwargs)
-            loss = self.__loss__(raw_preds, ex_label)
+            loss,pred_loss, size_loss = self.__loss__(raw_preds, ex_label)
             if epoch % 20 == 0 and debug:
                 print(f'Loss:{loss.item()}')
 
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
+        # print(f'pred loss: {pred_loss}, size loss: {size_loss}')
         for conv in self.model.convs:
             conv.require_sigmoid = False
         return self.edge_mask.data
@@ -144,6 +146,8 @@ class GNNExplainer(ExplainerBase):
             node_idx, self.__num_hops__, edge_index, relabel_nodes=True,
             num_nodes=None, flow=self.__flow__())
         # return None,None,None,None, new_edge_index.shape[-1]
+        if new_edge_index.shape[-1] <= 1:
+            return False
         new_x = x[subset]
         # new_y = y[subset]
         new_node_index = int(torch.where(subset == node_idx)[0])

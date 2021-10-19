@@ -80,7 +80,7 @@ def train_NC(parser,  lr ,head, dropout, wd2, hid_dim):
         gnnNets_NC.train()
         logits= gnnNets_NC(data.x, data.edge_index)
         prob = F.log_softmax(logits, dim=-1)
-        loss = criterion(prob[data.train_mask], data.y[data.train_mask])
+        loss = criterion(prob, data.y)
         optimizer.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_value_(gnnNets_NC.parameters(), clip_value=2)
@@ -114,10 +114,10 @@ def train_NC(parser,  lr ,head, dropout, wd2, hid_dim):
         if is_best or epoch % parser.save_epoch == 0:
             save_best(ckpt_dir, epoch, gnnNets_NC, parser.model_name, eval_info['val_acc'], is_best)
             print(f'Epoch {epoch}, Train Loss: {eval_info["train_loss"]:.4f}, '
-                        f'Train Accuracy: {eval_info["train_acc"]:.3f}, '
-                        f'Val Loss: {eval_info["val_loss"]:.3f}, '
-                        f'Val Accuracy: {eval_info["val_acc"]:.3f}',
-                        f'Test Accuracy: {eval_info["test_acc"]:.3f}')
+                  f'Train Accuracy: {eval_info["train_acc"]:.3f}, '
+                  f'Val Loss: {eval_info["val_loss"]:.3f}, '
+                  f'Val Accuracy: {eval_info["val_acc"]:.3f}',
+                  f'Test Accuracy: {eval_info["test_acc"]:.3f}')
 
 
     # report test msg
@@ -182,17 +182,17 @@ class ARGS():
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', default='GCN2', dest='gnn models')
-    parser.add_argument('--model_name', default='GM_GCN_nopre')
+    parser.add_argument('--model_name', default='GM_GCN_100')
     parser.add_argument('--model_level', default='node')
     parser.add_argument('--dim_hidden', default=20)
     parser.add_argument('--alpha', default=0.1)
     parser.add_argument('--theta', default=0.5)
-    parser.add_argument('--num_layers', default=2)
+    parser.add_argument('--num_layers', default=3)
     parser.add_argument('--shared_weights', default=False)
     parser.add_argument('--dropout', default=0.5)
     parser.add_argument('--dataset_dir', default='../datasets/')
-    parser.add_argument('--dataset_name', default='Pubmed')
-    parser.add_argument('--epoch', default=1500)
+    parser.add_argument('--dataset_name', default='BA_shapes')
+    parser.add_argument('--epoch', default=10000)
     parser.add_argument('--save_epoch', default=10)
     parser.add_argument('--lr', default=0.01)
     parser.add_argument('--wd1', default=1e-2)
@@ -207,13 +207,13 @@ if __name__ == '__main__':
     np.random.seed(0)
     for a in range(1,9):
         for b in range(1,9):
-                for c in range(1,4):
-                    heads.append([a,b,c])
+            for c in range(1,4):
+                heads.append([a,b,c])
     heads = [[8,]]
     lrs = [1e-3]
-    dropouts = [0.7]
-    wd2s = [1e-2]
-    hid_dims = [64]
+    dropouts = [0]
+    wd2s = [0]
+    hid_dims = [20]
     best_acc = 0
     best_parameters = []
     from itertools import product

@@ -1,6 +1,8 @@
 import os
 import glob
 import json
+import sys
+
 import torch
 import pickle
 import numpy as np
@@ -80,6 +82,7 @@ def read_syn_data(folder: str, prefix):
         adj, features, y_train, y_val, y_test, train_mask, val_mask, test_mask, edge_label_matrix = pickle.load(f)
 
     x = torch.from_numpy(features).float()
+
     y = train_mask.reshape(-1, 1) * y_train + val_mask.reshape(-1, 1) * y_val + test_mask.reshape(-1, 1) * y_test
     y = torch.from_numpy(np.where(y)[1])
     edge_index = dense_to_sparse(torch.from_numpy(adj))[0]

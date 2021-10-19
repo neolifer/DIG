@@ -34,12 +34,13 @@ parser.add_argument('--num_layers', default=3)
 parser.add_argument('--shared_weights', default=False)
 parser.add_argument('--dropout', default=0.1)
 parser.add_argument('--dataset_dir', default='./datasets/')
-parser.add_argument('--dataset_name', default='Ba_community')
+parser.add_argument('--dataset_name', default='BA_Community')
 parser.add_argument('--epoch', default=1000)
 parser.add_argument('--save_epoch', default=10)
 parser.add_argument('--lr', default=0.01)
 parser.add_argument('--wd1', default=1e-3)
 parser.add_argument('--wd2', default=1e-5)
+parser.add_argument('--use_baseline', default=False)
 parser = parser.parse_args()
 
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
@@ -50,10 +51,13 @@ import numpy as np
 np.random.seed(0)
 
 
-if parser.dataset_name not in  ['Cora','Pubmed']:
+if parser.dataset_name not in  ['Cora','Pubmed','Citeseer']:
     dataset = get_dataset(parser)
 else:
-    dataset = Planetoid('./datasets', parser.dataset_name,split="public", transform = T.NormalizeFeatures())
+    if parser.model_name == 'GCN2':
+        dataset = Planetoid('./datasets', parser.dataset_name,split="public", transform = T.NormalizeFeatures())
+    else:
+        dataset = Planetoid('./datasets', parser.dataset_name,split="public")
 # dim_node = dataset.num_node_features
 dataset.data.x = dataset.data.x.to(torch.float32)
 
@@ -71,11 +75,11 @@ num_classes = dataset.num_classes
 
 model_level = parser.model_level
 
-dim_hidden = parser.dim_hidden
+dim_hidden = int(parser.dim_hidden)
 
 alpha = parser.alpha
 theta=parser.theta
-num_layers=parser.num_layers
+num_layers= int(parser.num_layers)
 shared_weights=parser.shared_weights
 dropout=parser.dropout
 
@@ -92,7 +96,7 @@ model = GM_GCN(n_layers = num_layers, input_dim = dim_node, hid_dim = dim_hidden
 # model = GM_GCN2(model_level, dim_node, dim_hidden, num_classes, alpha, theta, num_layers,
 #                 shared_weights)
 model.to(device)
-ckpt_path = osp.join('checkpoints', 'ba_community', 'GM_GCN','GM_GCN_100_best.pth')
+ckpt_path = osp.join('checkpoints', parser.dataset_name.lower(), f'GM_GCN',f'{parser.model_name}_best.pth')
 # model.load_state_dict(torch.load(ckpt_path)['net'])
 
 # ckpt_path = osp.join('checkpoints', 'cora', 'GM_GCN','GM_GCN_nopre_best.pth')
@@ -126,25 +130,29 @@ allowance =  0.2
 penalty_scalings = [1.5]
 # penalty_scalings = [10]
 entropy_scales = [1]
-allowances = [0.03]
+allowances = [0.003]
 # allowances = [0.03]
 lr1s = [3e-2]
 lr2s = [1e-3]
 best_parameters = None
 best_spar = 1
 data = dataset.data
-large_index = pk.load(open('large_subgraph_bacom.pk','rb'))['node_idx']
-motif = pk.load(open('Ba_Community_motif.plk','rb'))
-explain_node_index_list = list(set(large_index).intersection(set(motif.keys())))
+# large_index = pk.load(open('large_subgraph_bacom.pk','rb'))['node_idx']
+# motif = pk.load(open('Ba_Community_motif.plk','rb'))
+# explain_node_index_list = list(set(large_index).intersection(set(motif.keys())))
 # explain_node_index_list = torch.where(data.test_mask)[0]
 # explain_node_index_list = pk.load(open(f'{parser.dataset_name}_within_nodes.pk','rb'))
-
+if parser.dataset_name == 'BA_Community' or parser.dataset_name == 'BA_shapes':
+    explain_node_index_list = pk.load(open(f'{parser.dataset_name}_explanation_node_list.pk','rb'))
+else:
+    explain_node_index_list = [i for i in range(data.y.shape[0])]
 # explain_node_index_list = list(range(len(data.train_mask)))
 # for penalty_scaling, entropy_scale, allowance,lr1, lr2 in tqdm.tqdm(product(penalty_scalings, entropy_scales,allowances, lr1s, lr2s),
 #                                                                      total = len(list(product(penalty_scalings, entropy_scales,allowances, lr1s, lr2s)))):
 for penalty_scaling, entropy_scale, allowance,lr1, lr2 in product(penalty_scalings, entropy_scales,allowances, lr1s, lr2s):
     explainer = GraphMaskExplainer(model, GraphMask, epoch = 500, penalty_scaling = penalty_scaling,
-                                   entropy_scale = entropy_scale,allowance = allowance, lr1 =lr1, lr2= lr2, batch_size = len(explain_node_index_list))
+                                   entropy_scale = entropy_scale,allowance = allowance, lr1 =lr1, lr2= lr2, batch_size = len(explain_node_index_list),
+                                   use_baseline = parser.use_baseline)
 
     import random
     import numpy as np
@@ -155,7 +163,7 @@ for penalty_scaling, entropy_scale, allowance,lr1, lr2 in product(penalty_scalin
     # state_dict = torch.load('gm_gcn100_bacom.pt')
     # GraphMask.load_state_dict(state_dict)
 
-    # explainer.train_graphmask(dataset, parser.dataset_name)
+    explainer.train_graphmask(dataset, parser.dataset_name, explain_node_index_list)
 
     # probs, sizes = explainer.train_graphmask(dataset)
     # outputs = {'prob':np.array(probs), 'graph_size':np.array(sizes)}
@@ -165,9 +173,9 @@ for penalty_scaling, entropy_scale, allowance,lr1, lr2 in product(penalty_scalin
     # sys.exit()
     # torch.save(GraphMask.state_dict(), f'checkpoints/explainer/pubmed/gm_gcn_constrained_{penalty_scaling}_{allowance}_nopre.pt')
 
-    state_dict = torch.load(f'checkpoints/explainer/pubmed/gm_gcn_constrained_{penalty_scaling}_{allowance}_nopre.pt')
+    # state_dict = torch.load('checkpoints/explainer/cora/gm_gcn_constrained_confirm_003_nopre.pt')
     # state_dict = torch.load('gm_gcn100_bacom_free.pt')
-    GraphMask.load_state_dict(state_dict)
+    # GraphMask.load_state_dict(state_dict)
     # sys.exit()
 
     #
@@ -215,6 +223,10 @@ for penalty_scaling, entropy_scale, allowance,lr1, lr2 in product(penalty_scalin
     # try:
     #     subgraphs = torch.load(f'checkpoints/graphmask_sub/graphmask_{parser.dataset_name}_sub_test.pt')
     # except:
+    if parser.dataset_name == 'BA_Community' or parser.dataset_name == 'BA_shapes':
+        explain_node_index_list = pk.load(open(f'{parser.dataset_name}_explanation_node_list.pk','rb'))
+    else:
+        explain_node_index_list = [i for i in range(data.y.shape[0]) if data.y[i] != 0]
     for j, node_idx in tqdm.tqdm(enumerate(explain_node_index_list), total= len(explain_node_index_list)):
         x, edge_index, y, subset, _ = explainer.get_subgraph(node_idx, data.x, data.edge_index,data.y)
         subgraphs[j] = {'x':x.cpu(), 'edge_index':edge_index.cpu(), 'new_node_idx':torch.where(subset == node_idx)[0].cpu(), 'y':y}

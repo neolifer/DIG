@@ -30,7 +30,7 @@ import torch_geometric.transforms as T
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--model', default='GCN2', dest='gnn models')
-parser.add_argument('--model_name', default='GCN')
+parser.add_argument('--model_name', default='GCN_nopre')
 parser.add_argument('--model_level', default='node')
 parser.add_argument('--dim_hidden', default=64)
 parser.add_argument('--alpha', default=0.1)
@@ -53,10 +53,13 @@ device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
 
 
-if parser.dataset_name != 'Cora':
+if parser.dataset_name not in  ['Cora','Pubmed']:
     dataset = get_dataset(parser)
 else:
-    dataset = Planetoid('./datasets', 'Cora',split="public", transform = T.NormalizeFeatures())
+    if parser.model_name == 'GCN2':
+        dataset = Planetoid('./datasets', parser.dataset_name,split="public", transform = T.NormalizeFeatures())
+    else:
+        dataset = Planetoid('./datasets', parser.dataset_name,split="public")
 # dim_node = dataset.num_node_features
 dataset.data.x = dataset.data.x.to(torch.float32)
 
@@ -97,7 +100,7 @@ model = GM_GCN(n_layers = num_layers, input_dim = dim_node, hid_dim = dim_hidden
 
 # model = GM_GCN2(model_level, dim_node, dim_hidden, num_classes, alpha, theta, num_layers,
 #                 shared_weights)
-ckpt_path = osp.join('checkpoints', 'cora', 'GM_GCN','GM_GCN_nopre_best.pth')
+ckpt_path = osp.join('checkpoints', parser.dataset_name.lower(), f'GM_{parser.model_name.split("_")[0]}',f'GM_{parser.model_name}_best.pth')
 # ckpt_path = osp.join('checkpoints', 'cora', 'GM_GCN2','GCN2_best.pth')
 model.load_state_dict(torch.load(ckpt_path)['net'])
 model.to(device)
@@ -107,10 +110,10 @@ torch.backends.cudnn.benchmark = True
 # tensor(0.1331) [0.34, 1, 1.5, 0.001]
 # tensor(0.1334) [0.3, 2.5, 1, 0.001]
 batch_size = 1
-coff_sizes = [2.2e-3, 2e-3, 1.5e-3, 1e-3]
+coff_sizes = [5e-3, 1e-2, 1e-3]
 coff_ents = [1]
-coff_preds = [2]
-lrs = [0.003]
+coff_preds = [1]
+lrs = [0.0001, 0.001]
 
 
 
@@ -118,6 +121,7 @@ best_spar = 0
 best_parameters = []
 # for coff_size, coff_ent, coff_pred, lr in tqdm(iterable= product(coff_sizes, coff_ents, coff_preds, lrs),
 #                                                total= len(list(product(coff_sizes, coff_ents, coff_preds, lrs)))):
+sparsity_all = []
 for coff_size, coff_ent, coff_pred, lr in product(coff_sizes, coff_ents, coff_preds, lrs):
     data = dataset.data
     data.to(device)
@@ -125,7 +129,7 @@ for coff_size, coff_ent, coff_pred, lr in product(coff_sizes, coff_ents, coff_pr
     random.seed(0)
     np.random.seed(0)
     explainer = PGExplainer(model, lr = lr, in_channels=3*dim_hidden,
-                            device=device, explain_graph=False, epochs = 1000,
+                            device=device, explain_graph=False, epochs = 100,
                             coff_size= coff_size, coff_ent= coff_ent, coff_pred = coff_pred, batch_size = batch_size).cuda()
     ## Run explainer on the given model and dataset
 
@@ -134,22 +138,21 @@ for coff_size, coff_ent, coff_pred, lr in product(coff_sizes, coff_ents, coff_pr
     c = []
     fidelitys = []
     sparsitys = []
-    sparsity_all = []
+
     while a < 1:
         c.append(a)
         a += b
     # --- Set the Sparsity to 0.5
     # large_index = pk.load(open('large_subgraph_bacom.pk','rb'))['node_idx']
     # motif = pk.load(open('Ba_Community_motif.plk','rb'))
-    # data = dataset[0].to(explainer.device)
-    data = dataset.data.to(explainer.device)
+    data = dataset[0].to(explainer.device)
+    # data = dataset.data.to(explainer.device)
     explain_node_index_list = torch.where(data.test_mask)[0]
     # explain_node_index_list = list(set(large_index).intersection(set(motif.keys())))
     subgraphs = {}
     try:
         subgraphs = torch.load(f'checkpoints/pgexplainer_sub/pgexplainer_{parser.dataset_name}_sub_test.pt')
     except:
-
         with torch.no_grad():
             for j, node_idx in tqdm(enumerate(explain_node_index_list), total= len(explain_node_index_list)):
                 x, edge_index, y, subset, _ = explainer.get_subgraph(node_idx=node_idx, x=data.x, edge_index=data.edge_index, y=data.y)
@@ -160,25 +163,26 @@ for coff_size, coff_ent, coff_pred, lr in product(coff_sizes, coff_ents, coff_pr
                 f1 = emb[col]
                 f2 = emb[row]
                 self_embed = emb[new_node_idx].repeat(f1.shape[0], 1)
-                f12self = torch.cat([f1, f2, self_embed], dim=-1)
+                f12self = torch.cat([f1, f2], dim=-1)
                 subgraphs[j] = {'x':x.cpu(), 'edge_index':edge_index.cpu(), 'new_node_idx':new_node_idx.cpu(),
                                 'subset':subset, 'emb':f12self.cpu(), 'node_size': emb.shape[0], 'feature_dim':emb.shape[-1]}
         torch.save(subgraphs, f'checkpoints/pgexplainer_sub/pgexplainer_{parser.dataset_name}_sub_test.pt')
     subgraphs = torch.load(f'checkpoints/pgexplainer_sub/pgexplainer_{parser.dataset_name}_sub_test.pt')
-    # print(explainer.elayers[0](subgraphs[0]['emb'].cuda()).grad_fn)
-    # sys.exit()
+
     for _ in range(1):
         # indices = list(set(large_index).intersection(set(motif.keys())))
         spars = [0 for _ in range(len(c))]
         for j, node_idx in tqdm(enumerate(explain_node_index_list), total = len(explain_node_index_list)):
+
             torch.manual_seed(42)
             random.seed(0)
             np.random.seed(0)
-            explainer = PGExplainer(model, lr = lr, in_channels=3*dim_hidden,
+            explainer = PGExplainer(model, lr = lr, in_channels=2*dim_hidden,
                                     device=device, explain_graph=False, epochs = 1000,
                                     coff_size= coff_size, coff_ent= coff_ent, coff_pred = coff_pred, batch_size = batch_size).cuda()
             # print(f'explain graph {i} node {node_idx}')
             subgraph = subgraphs[j]
+            print(subgraph['edge_index'].shape[-1])
             related_preds= \
                 explainer.train_explain_single(emb = subgraph['emb'],explanation_confidence = c, node_idx=node_idx,
                           x = subgraph['x'], edge_index = subgraph['edge_index'], new_node_idx = subgraph['new_node_idx'],
@@ -204,7 +208,7 @@ for coff_size, coff_ent, coff_pred, lr in product(coff_sizes, coff_ents, coff_pr
                 best_parameters = [coff_size, coff_ent, coff_pred, lr]
             print(f'Explanation_Confidence: {c[i]:.2f}\n'
                   f'Sparsity: {sparsity:.4f}')
-            sparsity_all.append(sparsity)
+            sparsity_all.append(sparsitys)
 
 print(sparsity_all)
 # print(best_fidelity, best_parameters)
