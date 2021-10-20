@@ -85,8 +85,8 @@ class HardConcrete(torch.nn.Module):
         if not training:
             return clipped_s, penalty
         #
-        # hard_concrete = (clipped_s >= 0.5).float()
-        # clipped_s = clipped_s + (hard_concrete - clipped_s).detach()
+        hard_concrete = (clipped_s >= 0.5).float()
+        clipped_s = clipped_s + (hard_concrete - clipped_s).detach()
 
         return clipped_s, penalty
 
@@ -255,7 +255,7 @@ class GraphMaskExplainer(torch.nn.Module):
 
         optimizer = Adam(self.graphmask.parameters(), lr=self.lr1, weight_decay=1e-5)
         decayRate = 0.96
-        data = dataset.data
+        data = dataset[0]
         data = data.to(self.device)
         lagrangian_optimization = LagrangianOptimization(optimizer,
                                                          self.device,

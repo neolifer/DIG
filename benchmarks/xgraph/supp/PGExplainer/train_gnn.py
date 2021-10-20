@@ -21,10 +21,13 @@ def train_NC(parser,  lr ,head, dropout, wd2, hid_dim):
     GNNs = {'GCN2': GCN2}
     # print('start loading data====================')
     # import pdb; pdb.set_trace()
-    if parser.dataset_name not in  ['Cora','Pubmed']:
+    if parser.dataset_name not in  ['Cora','Pubmed','Citeseer']:
         dataset = get_dataset(parser)
     else:
-        dataset = Planetoid('../datasets', parser.dataset_name,split="public")
+        if parser.model_name == 'GCN2':
+            dataset = Planetoid('./datasets', parser.dataset_name,split="public", transform = T.NormalizeFeatures())
+        else:
+            dataset = Planetoid('./datasets', parser.dataset_name,split="public")
     dataset.data.x = dataset.data.x.to(torch.float32)
     # dataset.data.x = dataset.data.x[:, :1]
     input_dim = dataset.num_node_features
@@ -49,7 +52,7 @@ def train_NC(parser,  lr ,head, dropout, wd2, hid_dim):
     wd1 = parser.wd1
 
 
-    data = dataset.data
+    data = dataset[0]
 
     # gnnNets_NC = GM_GCN2(model_level, dim_node, dim_hidden, num_classes, alpha, theta, num_layers,
     #                               shared_weights, dropout)
@@ -80,7 +83,7 @@ def train_NC(parser,  lr ,head, dropout, wd2, hid_dim):
         gnnNets_NC.train()
         logits= gnnNets_NC(data.x, data.edge_index)
         prob = F.log_softmax(logits, dim=-1)
-        loss = criterion(prob, data.y)
+        loss = criterion(prob[data.train_mask], data.y[data.train_mask])
         optimizer.zero_grad()
         loss.backward()
         torch.nn.utils.clip_grad_value_(gnnNets_NC.parameters(), clip_value=2)
@@ -182,17 +185,17 @@ class ARGS():
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--model', default='GCN2', dest='gnn models')
-    parser.add_argument('--model_name', default='GM_GCN_100')
+    parser.add_argument('--model_name', default='GM_GCN_nopre')
     parser.add_argument('--model_level', default='node')
     parser.add_argument('--dim_hidden', default=20)
     parser.add_argument('--alpha', default=0.1)
     parser.add_argument('--theta', default=0.5)
-    parser.add_argument('--num_layers', default=3)
+    parser.add_argument('--num_layers', default=2)
     parser.add_argument('--shared_weights', default=False)
     parser.add_argument('--dropout', default=0.5)
     parser.add_argument('--dataset_dir', default='../datasets/')
-    parser.add_argument('--dataset_name', default='BA_shapes')
-    parser.add_argument('--epoch', default=10000)
+    parser.add_argument('--dataset_name', default='Cora')
+    parser.add_argument('--epoch', default=1500)
     parser.add_argument('--save_epoch', default=10)
     parser.add_argument('--lr', default=0.01)
     parser.add_argument('--wd1', default=1e-2)
@@ -211,9 +214,9 @@ if __name__ == '__main__':
                 heads.append([a,b,c])
     heads = [[8,]]
     lrs = [1e-3]
-    dropouts = [0]
-    wd2s = [0]
-    hid_dims = [20]
+    dropouts = [0.7]
+    wd2s = [0.01]
+    hid_dims = [64]
     best_acc = 0
     best_parameters = []
     from itertools import product

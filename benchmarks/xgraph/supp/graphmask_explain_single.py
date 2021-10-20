@@ -124,10 +124,10 @@ GraphMask = GraphMaskAdjMatProbe(vertex_dims, message_dims, num_classes, hidden_
 model.cuda()
 GraphMask.cuda()
 allowance =  0.2
-penalty_scalings = [1]
+penalty_scalings = [0.001]
 # penalty_scalings = [10]
 entropy_scales = [1]
-allowances = [0.03]
+allowances = [0.05]
 # allowances = [0.03]
 lr1s = [3e-3]
 lr2s = [1e-4]
@@ -148,10 +148,12 @@ while a < 1:
     a += b
 if parser.dataset_name == 'BA_Community' or parser.dataset_name == 'BA_shapes':
     explain_node_index_list = pk.load(open(f'{parser.dataset_name}_explanation_node_list.pk','rb'))
+elif parser.dataset_name in ['Cora','Pubmed','Citeseer']:
+    explain_node_index_list = torch.where(data.test_mask)[0]
 else:
     explain_node_index_list = [i for i in range(data.y.shape[0]) if data.y[i] != 0]
 # explain_node_index_list = pk.load(open(f'{parser.dataset_name}_exclude_nodes.pk','rb'))
-explain_node_index_list = pk.load(open(f'{parser.dataset_name}_explanation_node_list.pk','rb'))
+# explain_node_index_list = pk.load(open(f'{parser.dataset_name}_explanation_node_list.pk','rb'))
 for explain_node_index_list in [explain_node_index_list]:
     for penalty_scaling, entropy_scale, allowance,lr1, lr2 in product(penalty_scalings, entropy_scales,allowances, lr1s, lr2s):
         sparsitys = []
