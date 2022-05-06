@@ -63,7 +63,7 @@ else:
         dataset = Planetoid('./datasets', parser.dataset_name,split="public", transform = T.NormalizeFeatures())
     else:
         dataset = Planetoid('./datasets', parser.dataset_name,split="public")
-dataset.data.x = dataset.data.x.to(torch.float32)ssh
+dataset.data.x = dataset.data.x.to(torch.float32)
 # dataset.data.x = dataset.data.x[:, :1]
 # dataset.data.y = dataset.data.y[:, 2]
 dim_node = dataset.num_node_features
