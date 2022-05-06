@@ -104,8 +104,7 @@ class GM_GCNconv(gnn.GCNConv):
                 else:
                     edge_index = cache
         self.last_edge_index = edge_index
-        x = torch.matmul(x, self.weight)
-
+        x = self.lin(x)
         # propagate_type: (x: Tensor, edge_weight: OptTensor)
         out = self.propagate(edge_index, x=x, edge_weight=edge_weight,
                              size=None, message_scale=message_scale, message_replacement=message_replacement)
@@ -160,13 +159,12 @@ class GM_GCNconv(gnn.GCNConv):
             # procedure since this allows us to inject the `edge_mask` into the
             # message passing computation scheme.
             if self.__explain__:
-            #     if self.require_sigmoid:
-            #         edge_mask = self.__edge_mask__.sigmoid()
-            #     else:
-                edge_mask = self.__edge_mask__
+                if self.require_sigmoid:
+                    edge_mask = self.__edge_mask__.sigmoid()
+                else:
+                    edge_mask = self.__edge_mask__
                 # Some ops add self-loops to `edge_index`. We need to do the
                 # same for `edge_mask` (but do not train those).
-
                 if out.size(self.node_dim) != edge_mask.size(0):
                     loop = edge_mask.new_ones(size[0])
                     edge_mask = torch.cat([edge_mask, loop], dim=0)
@@ -192,8 +190,8 @@ class GM_GCN(nn.Module):
         self.require_sigmoid = requires_sigmoid
         self.convs = nn.ModuleList([GM_GCNconv(input_dim, hid_dim)]
                                    + [
-                                        GM_GCNconv(hid_dim, hid_dim)
-                                        for _ in range(n_layers - 1)
+                                       GM_GCNconv(hid_dim, hid_dim)
+                                       for _ in range(n_layers - 1)
                                    ]
                                    )
         self.hidden_dims = [hid_dim for _ in range(n_layers)]
@@ -261,7 +259,7 @@ class GM_GCN(nn.Module):
         latest_vertex_embeddings = []
         for conv in self.convs:
             latest_vertex_embeddings.append(conv.get_latest_vertex_embedding())
-            conv.latest_vertex_embeddings = None
+            # conv.latest_vertex_embeddings = None
         return latest_vertex_embeddings
 
     def get_message_dim(self):
@@ -281,8 +279,8 @@ class GM_GCN2Conv(gnn.GCN2Conv):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.edge_weights = None
-        self.get_vertex = True
         self.require_sigmoid = False
+        self.get_vertex = False
     def forward(self, x: Tensor, x_0: Tensor, edge_index: Adj,
                 edge_weight: OptTensor = None, message_scale = None, message_replacement = None) -> Tensor:
         """"""
@@ -310,21 +308,13 @@ class GM_GCN2Conv(gnn.GCN2Conv):
                     edge_index = cache
 
         # propagate_type: (x: Tensor, edge_weight: OptTensor)
+        x = torch.addmm((1-self.alpha)*x, x, self.weight1, beta = (1 - self.beta), alpha = self.beta)
         x = self.propagate(edge_index, x=x, edge_weight=edge_weight, size=None, message_scale=message_scale, message_replacement=message_replacement)
         if x_0 is None:
             return x
-        x.mul_(1 - self.alpha)
-
-        x_0 = self.alpha * x_0[:x.size(0)]
-
-        if self.weight2 is None:
-            out = x.add_(x_0)
-            out = torch.addmm(out, out, self.weight1, beta=1. - self.beta,
-                              alpha=self.beta)
-        else:
-            out = torch.addmm(x, x, self.weight1, beta=1. - self.beta,
-                              alpha=self.beta)
-            out += torch.addmm(x_0, x_0, self.weight2, beta=1. - self.beta,
+        x_0 = x_0[:x.size(0)]
+        if self.weight2 is not None:
+            out = x + torch.addmm(self.alpha * x_0, x_0, self.weight2, beta=1. - self.beta,
                                alpha=self.beta)
         self.edge_weights = edge_weight
 
@@ -343,8 +333,8 @@ class GM_GCN2Conv(gnn.GCN2Conv):
             self.latest_vertex_embeddings = torch.cat([x_j, x_i, message], dim = -1) if message_scale is not None else torch.cat([x_j, x_i, original_message], dim = -1)
             # self.latest_vertex_embeddings = [x_j, x_i, message] if message_scale is not None else [x_j, x_i, original_message]
 
-    # print(self.latest_vertex_embeddings.shape[0])
-        if message_scale is not None:
+        # print(self.latest_vertex_embeddings.shape[0])
+        if message_replacement is not None:
             return message
         return original_message
 
@@ -408,7 +398,7 @@ class GM_GCN2(nn.Module):
 
         convs = []
         for i in range( num_layers ):
-            convs.append(GM_GCN2Conv(dim_hidden, alpha, theta, i + 1))
+            convs.append(GM_GCN2Conv(dim_hidden, alpha, theta, i + 1, shared_weights = shared_weights))
         self.convs = nn.ModuleList(
             convs
         )
@@ -460,18 +450,19 @@ class GM_GCN2(nn.Module):
             return out
         x = F.dropout(x, self.dropout, training=self.training)
         x = self.relu(self.fcs[0](x))
-        x = F.dropout(x, self.dropout, training=self.training)
-        x = self.relu(self.convs[0](x, None, edge_index))
         x_0 = x
         for i,conv in enumerate(self.convs):
-            if i == 0:
-                continue
             x = F.dropout(x, self.dropout, training=self.training)
             x = self.relu(conv(x, x_0, edge_index))
+        x = F.dropout(x, self.dropout, training=self.training)
         x = self.readout(x, batch)
         out = self.fcs[-1](x)
 
         return out
+
+    def set_get_vertex(self, get_vertex = True):
+        for conv in self.convs:
+            conv.get_vertex = get_vertex
 
     def get_emb(self,*args):
         if len(args) == 1:
@@ -494,7 +485,7 @@ class GM_GCN2(nn.Module):
             #     self.latest_vertex_embeddings[i].append(temp[i])
             #     conv.latest_vertex_embeddings = None
             self.latest_vertex_embeddings.append(conv.get_latest_vertex_embedding())
-            conv.latest_vertex_embeddings = None
+            # conv.latest_vertex_embeddings = None
         return self.latest_vertex_embeddings
 
     def get_message_dim(self):
@@ -517,13 +508,16 @@ class GM_GCN2(nn.Module):
 class GM_GATConv(gnn.GATConv):
     def __init__(self,*args, **kwargs):
         super(GM_GATConv, self).__init__(*args, **kwargs)
+        self.fill_value = 'mean'
         self.get_vertex = True
+        self.require_sigmoid = False
     def forward(self, x: Union[Tensor, OptPairTensor], edge_index: Adj,
-                size: Size = None, return_attention_weights=None, message_scale = None, message_replacement = None):
-        # type: (Union[Tensor, OptPairTensor], Tensor, Size, NoneType) -> Tensor  # noqa
-        # type: (Union[Tensor, OptPairTensor], SparseTensor, Size, NoneType) -> Tensor  # noqa
-        # type: (Union[Tensor, OptPairTensor], Tensor, Size, bool) -> Tuple[Tensor, Tuple[Tensor, Tensor]]  # noqa
-        # type: (Union[Tensor, OptPairTensor], SparseTensor, Size, bool) -> Tuple[Tensor, SparseTensor]  # noqa
+                edge_attr: OptTensor = None, size: Size = None,
+                return_attention_weights=None, message_scale = None, message_replacement = None):
+        # type: (Union[Tensor, OptPairTensor], Tensor, OptTensor, Size, NoneType) -> Tensor  # noqa
+        # type: (Union[Tensor, OptPairTensor], SparseTensor, OptTensor, Size, NoneType) -> Tensor  # noqa
+        # type: (Union[Tensor, OptPairTensor], Tensor, OptTensor, Size, bool) -> Tuple[Tensor, Tuple[Tensor, Tensor]]  # noqa
+        # type: (Union[Tensor, OptPairTensor], SparseTensor, OptTensor, Size, bool) -> Tuple[Tensor, SparseTensor]  # noqa
         r"""
         Args:
             return_attention_weights (bool, optional): If set to :obj:`True`,
@@ -531,46 +525,63 @@ class GM_GATConv(gnn.GATConv):
                 :obj:`(edge_index, attention_weights)`, holding the computed
                 attention weights for each edge. (default: :obj:`None`)
         """
+        # NOTE: attention weights will be returned whenever
+        # `return_attention_weights` is set to a value, regardless of its
+        # actual value (might be `True` or `False`). This is a current somewhat
+        # hacky workaround to allow for TorchScript support via the
+        # `torch.jit._overload` decorator, as we can only change the output
+        # arguments conditioned on type (`None` or `bool`), not based on its
+        # actual value.
+
         H, C = self.heads, self.out_channels
 
-        x_l: OptTensor = None
-        x_r: OptTensor = None
-        alpha_l: OptTensor = None
-        alpha_r: OptTensor = None
+        # We first transform the input node features. If a tuple is passed, we
+        # transform source and target node features via separate weights:
         if isinstance(x, Tensor):
-            assert x.dim() == 2, 'Static graphs not supported in `GATConv`.'
-            x_l = x_r = self.lin_l(x).view(-1, H, C)
-            alpha_l = (x_l * self.att_l).sum(dim=-1)
-            alpha_r = (x_r * self.att_r).sum(dim=-1)
-        else:
-            x_l, x_r = x[0], x[1]
-            assert x[0].dim() == 2, 'Static graphs not supported in `GATConv`.'
-            x_l = self.lin_l(x_l).view(-1, H, C)
-            alpha_l = (x_l * self.att_l).sum(dim=-1)
-            if x_r is not None:
-                x_r = self.lin_r(x_r).view(-1, H, C)
-                alpha_r = (x_r * self.att_r).sum(dim=-1)
+            assert x.dim() == 2, "Static graphs not supported in 'GATConv'"
+            x_src = x_dst = self.lin_src(x).view(-1, H, C)
+        else:  # Tuple of source and target node features:
+            x_src, x_dst = x
+            assert x_src.dim() == 2, "Static graphs not supported in 'GATConv'"
+            x_src = self.lin_src(x_src).view(-1, H, C)
+            if x_dst is not None:
+                x_dst = self.lin_dst(x_dst).view(-1, H, C)
 
-        assert x_l is not None
-        assert alpha_l is not None
+        x = (x_src, x_dst)
+
+        # Next, we compute node-level attention coefficients, both for source
+        # and target nodes (if present):
+        alpha_src = (x_src * self.att_src).sum(dim=-1)
+        alpha_dst = None if x_dst is None else (x_dst * self.att_dst).sum(-1)
+        alpha = (alpha_src, alpha_dst)
 
         if self.add_self_loops:
             if isinstance(edge_index, Tensor):
-                num_nodes = x_l.size(0)
-                if x_r is not None:
-                    num_nodes = min(num_nodes, x_r.size(0))
-                if size is not None:
-                    num_nodes = min(size[0], size[1])
-                edge_index, _ = remove_self_loops(edge_index)
-                edge_index, _ = add_self_loops(edge_index, num_nodes=num_nodes)
+                # We only want to add self-loops for nodes that appear both as
+                # source and target nodes:
+                num_nodes = x_src.size(0)
+                if x_dst is not None:
+                    num_nodes = min(num_nodes, x_dst.size(0))
+                num_nodes = min(size) if size is not None else num_nodes
+                edge_index, edge_attr = remove_self_loops(
+                    edge_index, edge_attr)
+                edge_index, edge_attr = add_self_loops(
+                    edge_index, edge_attr, fill_value=self.fill_value,
+                    num_nodes=num_nodes)
             elif isinstance(edge_index, SparseTensor):
-                edge_index = set_diag(edge_index)
-        self.last_edge_index = edge_index
-        # propagate_type: (x: OptPairTensor, alpha: OptPairTensor)
-        out = self.propagate(edge_index, x=(x_l, x_r),
-                             alpha=(alpha_l, alpha_r), size=size, message_scale = message_scale, message_replacement = message_replacement)
+                if self.edge_dim is None:
+                    edge_index = set_diag(edge_index)
+                else:
+                    raise NotImplementedError(
+                        "The usage of 'edge_attr' and 'add_self_loops' "
+                        "simultaneously is currently not yet supported for "
+                        "'edge_index' in a 'SparseTensor' form")
 
+        # propagate_type: (x: OptPairTensor, alpha: OptPairTensor, edge_attr: OptTensor)  # noqa
+        out = self.propagate(edge_index, x=x, alpha=alpha, edge_attr=edge_attr,
+                             size=size, message_scale = message_scale, message_replacement = message_replacement)
         alpha = self._alpha
+        assert alpha is not None
         self._alpha = None
 
         if self.concat:
@@ -582,35 +593,96 @@ class GM_GATConv(gnn.GATConv):
             out += self.bias
 
         if isinstance(return_attention_weights, bool):
-            assert alpha is not None
             if isinstance(edge_index, Tensor):
                 return out, (edge_index, alpha)
             elif isinstance(edge_index, SparseTensor):
                 return out, edge_index.set_value(alpha, layout='coo')
         else:
             return out
-
-    def message(self, x_j: Tensor, x_i:Tensor, alpha_j: Tensor, alpha_i: OptTensor,
-                index: Tensor, ptr: OptTensor,
-                size_i: Optional[int], message_scale: Tensor,
+    def message(self, x_i: Tensor,x_j: Tensor, alpha_j: Tensor, alpha_i: OptTensor,
+                edge_attr: OptTensor, index: Tensor, ptr: OptTensor,
+                size_i: Optional[int],message_scale: Tensor,
                 message_replacement: Tensor) -> Tensor:
+        # Given edge-level attention coefficients for source and target nodes,
+        # we simply need to sum them up to "emulate" concatenation:
         alpha = alpha_j if alpha_i is None else alpha_j + alpha_i
+
+        if edge_attr is not None:
+            if edge_attr.dim() == 1:
+                edge_attr = edge_attr.view(-1, 1)
+            assert self.lin_edge is not None
+            edge_attr = self.lin_edge(edge_attr)
+            edge_attr = edge_attr.view(-1, self.heads, self.out_channels)
+            alpha_edge = (edge_attr * self.att_edge).sum(dim=-1)
+            alpha = alpha + alpha_edge
         alpha = F.leaky_relu(alpha, self.negative_slope)
         alpha = softmax(alpha, index, ptr, size_i)
-        self._alpha = alpha
+        self._alpha = alpha  # Save for later use.
         alpha = F.dropout(alpha, p=self.dropout, training=self.training)
         original_message =  x_j * alpha.unsqueeze(-1)
         self.message_dim = original_message.shape[-1]
         if message_scale is not None:
-            original_message = torch.mul(original_message, message_scale.unsqueeze(-1))
+            original_message = torch.mul(original_message.reshape(original_message.shape[0], original_message.shape[1]*original_message.shape[2]), message_scale.unsqueeze(-1))
             if message_replacement is not None:
                 message = original_message + torch.mul( message_replacement, (1 - message_scale).unsqueeze(-1))
+                message = message.reshape(message.shape[0], self.heads, self.out_channels)
+        if message_scale is not None:
+            original_message = original_message.reshape(original_message.shape[0], self.heads, self.out_channels)
         if self.get_vertex:
             self.latest_vertex_embeddings = torch.cat([x_j, x_i, message], dim = -1) if message_scale is not None else torch.cat([x_j, x_i, original_message], dim = -1)
         # print(self.latest_vertex_embeddings.shape[0])
         if message_replacement is not None:
             return message
+
         return original_message
+
+    def propagate(self, edge_index: Adj, size: Size = None, **kwargs):
+        size = self.__check_input__(edge_index, size)
+
+        # Run "fused" message and aggregation (if applicable).
+        if (isinstance(edge_index, SparseTensor) and self.fuse
+                and not self.__explain__):
+            coll_dict = self.__collect__(self.__fused_user_args__, edge_index,
+                                         size, kwargs)
+
+            msg_aggr_kwargs = self.inspector.distribute(
+                'message_and_aggregate', coll_dict)
+            out = self.message_and_aggregate(edge_index, **msg_aggr_kwargs)
+
+            update_kwargs = self.inspector.distribute('update', coll_dict)
+            return self.update(out, **update_kwargs)
+
+        # Otherwise, run both functions in separation.
+        elif isinstance(edge_index, Tensor) or not self.fuse:
+            coll_dict = self.__collect__(self.__user_args__, edge_index, size,
+                                         kwargs)
+
+            msg_kwargs = self.inspector.distribute('message', coll_dict)
+            out = self.message(**msg_kwargs)
+
+            # For `GNNExplainer`, we require a separate message and aggregate
+            # procedure since this allows us to inject the `edge_mask` into the
+            # message passing computation scheme.
+            if self.__explain__:
+                if self.require_sigmoid:
+                    edge_mask = self.__edge_mask__.sigmoid()
+                else:
+                    edge_mask = self.__edge_mask__
+                # Some ops add self-loops to `edge_index`. We need to do the
+                # same for `edge_mask` (but do not train those).
+
+                if out.size(self.node_dim) != edge_mask.size(0):
+                    loop = edge_mask.new_ones(size[0])
+                    edge_mask = torch.cat([edge_mask, loop], dim=0)
+                assert out.size(self.node_dim) == edge_mask.size(0)
+                out = out * edge_mask.view([-1] + [1] * (out.dim() - 1))
+
+            aggr_kwargs = self.inspector.distribute('aggregate', coll_dict)
+            out = self.aggregate(out, **aggr_kwargs)
+
+            update_kwargs = self.inspector.distribute('update', coll_dict)
+            return self.update(out, **update_kwargs)
+
 
     def get_latest_vertex_embedding(self):
         return self.latest_vertex_embeddings
@@ -632,7 +704,7 @@ class GM_GAT(nn.Module):
                                        for i in range(n_layers - 1)
                                    ]
                                    )
-        self.hidden_dims = [hid_dim for _ in range(n_layers)]
+        self.hidden_dims = [hid_dim *heads[l] for l in range(n_layers)]
         self.outlayer = nn.Linear(heads[-1]*hid_dim, n_classes)
         self.relu = nn.ReLU()
         self.dropout = nn.Dropout(dropout)
@@ -646,6 +718,17 @@ class GM_GAT(nn.Module):
     def set_get_vertex(self, get_vertex = True):
         for conv in self.convs:
             conv.get_vertex = get_vertex
+
+
+    def get_emb(self,x, edge_index):
+        for conv in self.convs:
+            x = conv(x, edge_index)
+            x = self.relu(x)
+            x = self.dropout(x)
+        x = self.readout(x, None)
+        return x
+
+
     def forward(self, x, edge_index, message_scales = None, message_replacement = None):
         # x, edge_index = data.x, data.edge_index
         if message_scales and message_replacement:
@@ -653,7 +736,7 @@ class GM_GAT(nn.Module):
                 x = conv(x, edge_index,message_scale=message_scales[i], message_replacement=message_replacement[i])
                 x = self.relu(x)
                 x = self.dropout(x)
-            x = self.readout(x)
+            x = self.readout(x, None)
             x = self.outlayer(x)
             return x
         elif message_scales:
@@ -661,14 +744,14 @@ class GM_GAT(nn.Module):
                 x = conv(x, edge_index,message_scale=message_scales[i], message_replacement=None)
                 x = self.relu(x)
                 x = self.dropout(x)
-            x = self.readout(x)
+            x = self.readout(x, None)
             x = self.outlayer(x)
             return x
         for conv in self.convs:
             x = conv(x, edge_index)
             x = self.relu(x)
             x = self.dropout(x)
-        x = self.readout(x)
+        x = self.readout(x, None)
         x = self.outlayer(x)
         return x
 
@@ -676,7 +759,7 @@ class GM_GAT(nn.Module):
         self.latest_vertex_embeddings = []
         for conv in self.convs:
             self.latest_vertex_embeddings.append(conv.get_latest_vertex_embedding())
-            conv.latest_vertex_embeddings = None
+
         return self.latest_vertex_embeddings
 
     def get_message_dim(self):
@@ -762,14 +845,14 @@ class GM_SAGE(nn.Module):
                 x = conv(x, edge_index,message_scale=message_scales[i], message_replacement=message_replacement[i])
                 x = self.relu(x)
                 x = self.dropout(x)
-            x = self.readout(x)
+            x = self.readout(x, None)
             x = self.outlayer(x)
             return x
         for conv in self.convs:
             x = conv(x, edge_index)
             x = self.relu(x)
             x = self.dropout(x)
-        x = self.readout(x)
+        x = self.readout(x, None)
         x = self.outlayer(x)
         return x
 
