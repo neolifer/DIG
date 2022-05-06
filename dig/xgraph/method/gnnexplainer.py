@@ -44,16 +44,20 @@ class GNNExplainer(ExplainerBase):
 
     def __init__(self, model, epochs=1000, lr=0.01, explain_graph=False):
         super(GNNExplainer, self).__init__(model, epochs, lr, explain_graph)
-
+        self.loss = torch.nn.NLLLoss()
 
 
     def __loss__(self, raw_preds, x_label):
         if self.explain_graph:
             loss = cross_entropy_with_logit(raw_preds, x_label)
         else:
-            loss = cross_entropy_with_logit(raw_preds[self.node_idx].unsqueeze(0), x_label)
+            raw_preds = F.log_softmax(raw_preds, dim = -1)
+            # print(raw_preds[self.node_idx].shape, x_label.unsqueeze(0).shape)
+            # sys.exit()
+            loss = self.loss(raw_preds[self.node_idx].unsqueeze(0), x_label.unsqueeze(0))
 
         m = self.edge_mask.sigmoid()
+        temp = loss.item()
         loss = loss + self.coeffs['edge_size'] * m.sum()
         ent = -m * torch.log(m + EPS) - (1 - m) * torch.log(1 - m + EPS)
         loss = loss + self.coeffs['edge_ent'] * ent.mean()
@@ -64,7 +68,7 @@ class GNNExplainer(ExplainerBase):
             ent = -m * torch.log(m + EPS) - (1 - m) * torch.log(1 - m + EPS)
             loss = loss + self.coeffs['node_feat_ent'] * ent.mean()
 
-        return loss
+        return loss, temp, m.sum().item()
 
     def gnn_explainer_alg(self,
                           x: Tensor,
@@ -81,8 +85,8 @@ class GNNExplainer(ExplainerBase):
         # train to get the mask
         optimizer = torch.optim.Adam([self.node_feat_mask, self.edge_mask],
                                      lr=self.lr)
-        # for conv in self.model.convs:
-        #     conv.require_sigmoid = True
+        for conv in self.model.convs:
+            conv.require_sigmoid = True
         for epoch in range(1, self.epochs + 1):
 
             if mask_features:
@@ -90,18 +94,19 @@ class GNNExplainer(ExplainerBase):
             else:
                 h = x
             raw_preds = self.model(h, edge_index, **kwargs)
-            loss = self.__loss__(raw_preds, ex_label)
+            loss,pred_loss, size_loss = self.__loss__(raw_preds, ex_label)
             if epoch % 20 == 0 and debug:
                 print(f'Loss:{loss.item()}')
 
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-        # for conv in self.model.convs:
-        #     conv.require_sigmoid = False
+        # print(f'pred loss: {pred_loss}, size loss: {size_loss}')
+        for conv in self.model.convs:
+            conv.require_sigmoid = False
         return self.edge_mask.data
 
-    def forward(self, x, edge_index, y,evaluation_confidence, mask_features=False, control_sparsity = False,**kwargs):
+    def forward(self, x, edge_index, y,evaluation_confidence, mask_features=False, control_sparsity = False,data=None, **kwargs):
         r"""
         Run the explainer for a specific graph instance.
 
@@ -128,7 +133,7 @@ class GNNExplainer(ExplainerBase):
         """
         super().forward(x=x, edge_index=edge_index, **kwargs)
         self.model.eval()
-
+        self.y = y
         # self_loop_edge_index, _ = add_remaining_self_loops(edge_index, num_nodes=self.num_nodes)
 
         # Only operate on a k-hop subgraph around `node_idx`.
@@ -141,49 +146,82 @@ class GNNExplainer(ExplainerBase):
             node_idx, self.__num_hops__, edge_index, relabel_nodes=True,
             num_nodes=None, flow=self.__flow__())
         # return None,None,None,None, new_edge_index.shape[-1]
+        # if motif:
+        #     edge_pos = {}
+        #     edge_count = 0
+        #     for i in range(self.hard_edge_mask.shape[0]):
+        #         if self.hard_edge_mask[i]:
+        #             edge_pos[i] = edge_count
+        #             edge_count += 1
+        #     for i in range(len(motif)):
+        #         motif[i] = edge_pos[motif[i]]
+        #
+        # if new_edge_index.shape[-1] <= 1:
+        #     return False
         new_x = x[subset]
+        new_y = data.y[subset]
         # new_y = y[subset]
         new_node_index = int(torch.where(subset == node_idx)[0])
         self.node_idx = new_node_index
         # Assume the mask we will predict
         new_edge_index = add_remaining_self_loops(new_edge_index)[0]
 
-        labels = tuple(i for i in range(kwargs.get('num_classes')))
-        ex_labels = tuple(torch.tensor([label]).to(self.device) for label in labels)
         self.model.to(x.device)
         label = F.softmax(self.model(new_x, new_edge_index), dim = -1)[new_node_index].squeeze().argmax(-1)
         # Calculate mask
-        edge_masks = []
-        for ex_label in ex_labels:
-            self.__clear_masks__()
-            self.__set_masks__(new_x, new_edge_index)
-            if not ex_label == label:
-                edge_masks.append(None)
-                continue
-            if control_sparsity:
-                edge_masks.append(self.control_sparsity(self.gnn_explainer_alg(new_x, new_edge_index, ex_label), sparsity=kwargs.get('sparsity')))
-            else:
-                edge_masks.append(self.gnn_explainer_alg(new_x, new_edge_index, ex_label))
-        related_preds = []
-        sparsity = 1
-        confidence = 0
-        for e in evaluation_confidence:
-            if confidence >= e:
-                related_preds.append(sparsity)
-                continue
-            while confidence < e:
-                edge_mask= self.control_sparsity(edge_masks[label], sparsity = sparsity)
-                with torch.no_grad():
-                    temp = self.eval_related_pred(new_x, new_edge_index, edge_mask, label, **kwargs)
-                confidence = temp[0]['evaluation_confidence'].item()
-                if confidence >= e:
-                    related_preds.append(sparsity)
-                    break
-                else:
-                    sparsity -= 0.05
-        self.__clear_masks__()
 
-        return self.hard_edge_mask, x, new_edge_index, edge_masks, related_preds
+
+        self.__clear_masks__()
+        self.__set_masks__(new_x, new_edge_index)
+        #
+        edge_mask= self.gnn_explainer_alg(new_x, new_edge_index, label)
+
+        # related_preds = []
+        # sparsity = 1
+        # confidence = 0
+        # for e in evaluation_confidence:
+        #     if confidence >= e:
+        #         related_preds.append(sparsity)
+        #         continue
+        #     while confidence < e:
+        #         temp_mask = self.control_sparsity(edge_mask, sparsity = sparsity)
+        #         with torch.no_grad():
+        #             temp = self.eval_related_pred(new_x, new_edge_index, temp_mask, label, **kwargs)
+        #         confidence = temp[0]['evaluation_confidence'].item()
+        #         if confidence >= e:
+        #             related_preds.append(sparsity)
+        #             break
+        #         else:
+        #             sparsity -= 0.05
+        # self.__clear_masks__()
+        #
+        # return self.hard_edge_mask, x, new_edge_index, edge_mask, related_preds
+        # sparsities = []
+        # s = 0
+        # while s < 0.45:
+        #     sparsities.append(0.5+s)
+        #     s += 0.05
+        related_preds = {'fidelity':[],'acc':[]}
+        # for s in sparsities:
+        #     temp_mask = self.control_sparsity(edge_mask, sparsity = s)
+        #     with torch.no_grad():
+        #         temp = self.eval_related_pred(new_x, new_edge_index, temp_mask, label, **kwargs)
+        #     related_preds['fidelity'].append(temp[0])
+        #     related_preds['acc'].append(temp[1])
+            # related_preds['evaluation_confidence'].append(temp[0])
+            # in_motif = 0
+            # for i in motif:
+            #     if edge_mask[i]:
+            #         in_motif+= 1
+            # related_preds['in_motif'].append(in_motif)
+        self.__clear_masks__()
+        edge_mask = F.softmax(edge_mask, dim=-1)
+        class_count = [0,0,0,0,0,0,0]
+        for i in range(edge_mask.shape[0]):
+            class_count[new_y[new_edge_index[0,i]]] += edge_mask[i].item()/2
+            class_count[new_y[new_edge_index[1,i]]] += edge_mask[i].item()/2
+        # return self.hard_edge_mask, x, new_edge_index, edge_mask, related_preds
+        return label.item(), class_count
 
 
 

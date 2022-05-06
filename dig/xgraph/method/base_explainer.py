@@ -132,11 +132,14 @@ class ExplainerBase(nn.Module):
             # mask_indices = torch.where(self.hard_edge_mask)[0]
             sub_mask = mask
             mask_len = sub_mask.shape[0]
-            top_k = int((1 - sparsity) * mask_len)
+            if sparsity <= 1:
+                top_k = int((1 - sparsity) * mask_len)
+            else:
+                top_k = int(sparsity)
             ones = torch.topk(sub_mask, k= top_k, dim=0)
 
-            edge_mask = torch.zeros_like(sub_mask)
-            edge_mask[ones.indices] = 1
+            edge_mask = torch.ones_like(sub_mask)
+            edge_mask[ones.indices] = 0
             return edge_mask
         else:
             _, indices = torch.sort(mask, descending=True)
@@ -145,8 +148,8 @@ class ExplainerBase(nn.Module):
             important_indices = indices[: split_point]
             unimportant_indices = indices[split_point:]
             trans_mask = mask.clone()
-            trans_mask[important_indices] = 1
-            trans_mask[unimportant_indices] = 0
+            trans_mask[important_indices] = 0
+            trans_mask[unimportant_indices] = 1
 
         return trans_mask
 
@@ -409,18 +412,20 @@ class ExplainerBase(nn.Module):
 
 
         self.edge_mask.data = torch.ones(edge_mask.size(), device=self.device)
+
         ori_pred = F.softmax(self.model(x, edge_index), dim = -1)[node_idx].squeeze()[label]
+        ori_acc = F.softmax(self.model(x, edge_index), dim = -1)[node_idx].squeeze().argmax() == self.y
         self.edge_mask.data = edge_mask
         masked_pred = F.softmax(self.model(x, edge_index), dim = -1)[node_idx].squeeze()[label]
-
-        confidence = 1 - torch.abs(ori_pred - masked_pred)/ori_pred
-
-
-
-
-
-        related_preds.append({'evaluation_confidence': confidence})
-
+        masked_acc = F.softmax(self.model(x, edge_index), dim = -1)[node_idx].squeeze().argmax() == self.y
+        # confidence = 1 - torch.abs(ori_pred - masked_pred)/ori_pred
+        # related_preds.append({'evaluation_confidence': confidence})
+        fidelity = ori_pred - masked_pred
+        #
+        acc = masked_acc.item() - ori_acc.item()
+        #
+        related_preds.append(fidelity)
+        related_preds.append(acc)
 
         return related_preds
 
